@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pip install -q -e '.[dev,all]' >/dev/null 2>&1 || pip install -q sqlglot pytest ruff >/dev/null 2>&1; echo 'sqlguard: dev environment ready (pytest, ruff, sqlglot).'"
+          }
+        ]
+      }
+    ]
+  }
+}

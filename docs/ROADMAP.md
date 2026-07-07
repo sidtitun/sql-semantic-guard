@@ -11,11 +11,15 @@ effort estimate, and an acceptance criterion so "done" is testable.
 Priorities: **P0** = blocks trust/adoption · **P1** = major differentiator ·
 **P2** = valuable, not urgent · **P3** = exploratory.
 
+Every phase has a detailed implementation plan (designs, APIs, files touched,
+test plans, risks) under [plans/](plans/README.md).
+
 ---
 
 ## Phase 0 — Hardening the v1 core (close known gaps)
 
 *Goal: nothing in the package is untested, unpublished, or unmeasured.*
+*Detailed plan: [plans/phase-0-hardening.md](plans/phase-0-hardening.md)*
 
 | # | Item | Prio | Effort | Acceptance criterion |
 |---|---|:---:|:---:|---|
@@ -30,6 +34,7 @@ Priorities: **P0** = blocks trust/adoption · **P1** = major differentiator ·
 ## Phase 1 — Deeper semantic validation (the differentiator)
 
 *Goal: catch the remaining "wrong answer" failure classes, not just "broken query" ones.*
+*Detailed plan: [plans/phase-1-semantics.md](plans/phase-1-semantics.md)*
 
 | # | Item | Prio | Effort | Acceptance criterion |
 |---|---|:---:|:---:|---|
@@ -43,6 +48,7 @@ Priorities: **P0** = blocks trust/adoption · **P1** = major differentiator ·
 ## Phase 2 — Security depth (enterprise asks)
 
 *Goal: cover the full 7-layer enterprise guardrail matrix, not just tenancy.*
+*Detailed plan: [plans/phase-2-security.md](plans/phase-2-security.md)*
 
 | # | Item | Prio | Effort | Acceptance criterion |
 |---|---|:---:|:---:|---|
@@ -57,6 +63,7 @@ Priorities: **P0** = blocks trust/adoption · **P1** = major differentiator ·
 ## Phase 3 — Cost intelligence & engine coverage
 
 *Goal: replace config-knob heuristics with data, and widen the engine matrix.*
+*Detailed plan: [plans/phase-3-cost-and-engines.md](plans/phase-3-cost-and-engines.md)*
 
 | # | Item | Prio | Effort | Acceptance criterion |
 |---|---|:---:|:---:|---|
@@ -70,6 +77,7 @@ Priorities: **P0** = blocks trust/adoption · **P1** = major differentiator ·
 ## Phase 4 — Ecosystem & developer experience
 
 *Goal: be one import away in every stack where text-to-SQL is built.*
+*Detailed plan: [plans/phase-4-ecosystem.md](plans/phase-4-ecosystem.md)*
 
 | # | Item | Prio | Effort | Acceptance criterion |
 |---|---|:---:|:---:|---|
@@ -82,6 +90,8 @@ Priorities: **P0** = blocks trust/adoption · **P1** = major differentiator ·
 | 4.7 | **`validate_many` batch API** + free-threading benchmarks | P3 | 1 d | Batch of 100 queries validates with one catalog lock-in, documented throughput |
 
 ## Phase 5 — Exploratory (validate demand before building)
+
+*Detailed plan: [plans/phase-5-exploratory.md](plans/phase-5-exploratory.md)*
 
 | # | Item | Prio | Effort | Notes |
 |---|---|:---:|:---:|---|

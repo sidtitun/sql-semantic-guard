@@ -222,6 +222,9 @@ pytest          # 160+ tests
 ruff check .
 ```
 
+Where this is headed: [docs/ROADMAP.md](docs/ROADMAP.md) (phased enhancement
+plan). How v1 was built and scored: [docs/PLAN_AND_REVIEW.md](docs/PLAN_AND_REVIEW.md).
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).

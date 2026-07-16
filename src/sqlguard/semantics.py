@@ -712,14 +712,19 @@ ALL_COLUMNS = None  # sentinel: every column of the table is referenced
 
 
 def collect_referenced_columns(
-    tree: exp.Expression, index: CatalogIndex
+    tree: exp.Expression, index: CatalogIndex, scope_index=None
 ) -> dict[tuple[str | None, str], set[str] | None]:
     """Which physical columns does the (final) tree touch, per table?
 
     Value ``None`` means "all columns" (an unexpanded ``*``). Keys are
-    normalized ``(schema, table)`` pairs.
+    normalized ``(schema, table)`` pairs. Pass ``scope_index`` (a
+    :class:`sqlguard.scopeindex.ScopeIndex` over ``tree``) to reuse
+    already-built scope maps.
     """
-    infos, by_expr = scope_infos_with_lookup(tree, index)
+    if scope_index is not None:
+        infos, by_expr = scope_index.infos, scope_index.by_expression
+    else:
+        infos, by_expr = scope_infos_with_lookup(tree, index)
     referenced: dict[tuple[str | None, str], set[str] | None] = {}
 
     def key_of(table: Table) -> tuple[str | None, str]:

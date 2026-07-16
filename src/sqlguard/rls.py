@@ -111,13 +111,17 @@ def apply_rls(
     policy: Policy,
     params: Mapping[str, Any],
     dialect: str,
+    scope_index=None,
 ) -> tuple[list[Violation], list[Rewrite]]:
     if not policy.rls:
         return [], []
 
     violations: list[Violation] = []
     rewrites: list[Rewrite] = []
-    infos, _, _ = build_scope_maps(tree, index)
+    if scope_index is not None:
+        infos = scope_index.infos
+    else:
+        infos, _, _ = build_scope_maps(tree, index)
 
     # (info, alias, source-node, [predicates]) queued for injection
     injections: list[tuple[ScopeInfo, str, exp.Expression, list[exp.Expression]]] = []
@@ -282,8 +286,12 @@ def apply_rls(
             if preds:
                 injections.append((info, alias, src.node, preds))
 
+    wrapped_any = False
     for info, alias, node, preds in injections:
-        _inject(info, alias, node, preds, policy)
+        wrapped_any |= _inject(info, alias, node, preds, policy)
+    if wrapped_any and scope_index is not None:
+        # Subquery wraps change source topology; downstream stages must rebuild.
+        scope_index.invalidate()
 
     return violations, rewrites
 
@@ -319,15 +327,17 @@ def _inject(
     node: exp.Expression,
     preds: list[exp.Expression],
     policy: Policy,
-) -> None:
+) -> bool:
+    """Place the predicates; returns True when a subquery wrap occurred
+    (the one mutation that changes source topology)."""
     select = info.expression
 
-    def wrap() -> None:
+    def wrap() -> bool:
         _wrap_in_subquery(node, alias, preds)
+        return True
 
     if policy.rls_strategy == "subquery" or not isinstance(select, exp.Select):
-        wrap()
-        return
+        return wrap()
 
     parent: exp.Expression | None = node.parent
     while parent is not None and not isinstance(parent, (exp.From, exp.Join)):
@@ -336,21 +346,20 @@ def _inject(
     if isinstance(parent, exp.Join):
         side = (parent.side or "").upper()
         if parent.args.get("using") or side in ("RIGHT", "FULL"):
-            wrap()
-            return
+            return wrap()
         if side == "LEFT":
             on = parent.args.get("on")
             if on is None:
-                wrap()
-            else:
-                parent.set("on", exp.and_(on, *preds))
-            return
+                return wrap()
+            parent.set("on", exp.and_(on, *preds))
+            return False
         # INNER / CROSS / comma join: WHERE is equivalent and more readable
         select.where(*preds, copy=False)
-        return
+        return False
 
     # plain FROM source
     select.where(*preds, copy=False)
+    return False
 
 
 def _wrap_in_subquery(

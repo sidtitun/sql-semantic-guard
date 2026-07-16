@@ -73,12 +73,16 @@ def apply_column_rules(
     index: CatalogIndex,
     policy: Policy,
     dialect: str,
+    scope_index=None,
 ) -> tuple[list[Violation], list[Rewrite]]:
     """Enforce ColumnRules.
 
     Order matters: violations for *explicit* references are collected first
     (before any star-expanded projection items are dropped), then matching
     items are removed from star-expanded SELECT lists.
+
+    Dropping projection items does not change source topology, so a shared
+    ``scope_index`` stays valid across this pass.
     """
     rules = list(policy.column_rules)
     if not rules:
@@ -86,7 +90,10 @@ def apply_column_rules(
 
     violations: list[Violation] = []
     rewrites: list[Rewrite] = []
-    infos, by_expr = scope_infos_with_lookup(tree, index)
+    if scope_index is not None:
+        infos, by_expr = scope_index.infos, scope_index.by_expression
+    else:
+        infos, by_expr = scope_infos_with_lookup(tree, index)
 
     # Projection items that came from a ``*`` expansion are exempt from
     # "explicit reference" violations — they get dropped instead.

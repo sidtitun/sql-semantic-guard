@@ -148,6 +148,13 @@ structurally compare on every access in CI (debug assertion mode).
 **Acceptance.** Benchmark medium query ≤3.5 ms E2E (from 6.0 ms) with zero
 test modifications; fuzz suite green.
 
+**Outcome (implemented).** Shipped with all tests green in normal and
+`SQLGUARD_PARANOID` modes. Measured: invalid-path −37% (1.04→0.66 ms),
+throughput +12.5% (480→540/s), medium query −6% (6.03→5.69 ms). The ≤3.5 ms
+target was not reached because profiling shows the residual cost is sqlglot's
+`qualify()`/`annotate_types()` and parse — not scope traversal. Further E2E
+gains need caching at those layers; tracked as follow-up, not blocking v0.2.
+
 ## 0.5 Benchmark regression gate (P1, 1 d)
 
 **Design.**

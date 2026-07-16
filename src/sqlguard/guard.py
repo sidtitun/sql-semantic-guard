@@ -23,6 +23,7 @@ from sqlguard import analyzer, cost, rewrite, rls, semantics
 from sqlguard.catalog import Catalog, CatalogIndex, match_table
 from sqlguard.errors import PolicyError, ValidationFailed
 from sqlguard.policy import Policy
+from sqlguard.scopeindex import ScopeIndex
 from sqlguard.violations import (
     Code,
     QueryStats,
@@ -233,36 +234,48 @@ class SQLGuard:
         elif not binding_failed and not policy.check_types:
             skipped.append("type_checks")
 
+        # Shared scope index: built once here, reused by every remaining stage.
+        # Predicate/limit/projection mutations don't change source topology;
+        # apply_rls invalidates it on the one mutation that does (subquery wraps).
+        scope_index = ScopeIndex(tree, index)
+
         # 7. column policy --------------------------------------------------------
         run.append("column_policy")
         col_violations, col_rewrites = rewrite.apply_column_rules(
-            tree, index, policy, dialect
+            tree, index, policy, dialect, scope_index=scope_index
         )
         violations.extend(col_violations)
         rewrites.extend(col_rewrites)
 
         # 8. row-level security ------------------------------------------------
         run.append("row_level_security")
-        rls_violations, rls_rewrites = rls.apply_rls(tree, index, policy, params, dialect)
+        rls_violations, rls_rewrites = rls.apply_rls(
+            tree, index, policy, params, dialect, scope_index=scope_index
+        )
         violations.extend(rls_violations)
         rewrites.extend(rls_rewrites)
 
         # 9. limit enforcement ---------------------------------------------------
         run.append("limit_enforcement")
-        tree, limit_rewrites = rewrite.enforce_limit(tree, policy)
+        new_tree, limit_rewrites = rewrite.enforce_limit(tree, policy)
         rewrites.extend(limit_rewrites)
+        if new_tree is not tree:  # defensive: builders normally mutate in place
+            tree = new_tree
+            scope_index = ScopeIndex(tree, index)
 
         # 10. join sanity ---------------------------------------------------------
         if policy.check_joins:
             run.append("join_checks")
-            violations.extend(cost.check_joins(tree, index, policy, dialect))
+            violations.extend(
+                cost.check_joins(tree, index, policy, dialect, scope_index=scope_index)
+            )
         else:
             skipped.append("join_checks")
 
         # 11. partition filters ------------------------------------------------
         run.append("partition_filters")
         part_violations, part_flags = cost.check_partition_filters(
-            tree, index, policy, dialect
+            tree, index, policy, dialect, scope_index=scope_index
         )
         violations.extend(part_violations)
 
@@ -274,6 +287,7 @@ class SQLGuard:
             policy=policy,
             dialect=dialect,
             partition_flags=part_flags,
+            scope_index=scope_index,
         )
         rendered = tree.sql(dialect=dialect)
         for i, estimator in enumerate(self.estimators):
@@ -285,7 +299,9 @@ class SQLGuard:
                 stats.cost = estimate
 
         # stats: referenced columns on the final tree -----------------------
-        referenced = semantics.collect_referenced_columns(tree, index)
+        referenced = semantics.collect_referenced_columns(
+            tree, index, scope_index=scope_index
+        )
         for (schema, name), cols in sorted(referenced.items()):
             display = f"{schema}.{name}" if schema else name
             stats.referenced_columns[display] = (

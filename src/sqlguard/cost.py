@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlglot import exp
 
@@ -45,7 +45,7 @@ def _aliases_in(condition: exp.Expression) -> set[str]:
 
 
 def check_joins(
-    tree: exp.Expression, index: CatalogIndex, policy: Policy, dialect: str
+    tree: exp.Expression, index: CatalogIndex, policy: Policy, dialect: str, scope_index=None
 ) -> list[Violation]:
     """Heuristics for the classic LLM join failures.
 
@@ -56,7 +56,10 @@ def check_joins(
         return []
     severity = Severity.ERROR if policy.strict_joins else Severity.WARNING
     violations: list[Violation] = []
-    infos, _, _ = build_scope_maps(tree, index)
+    if scope_index is not None:
+        infos = scope_index.infos
+    else:
+        infos, _, _ = build_scope_maps(tree, index)
 
     for info in infos:
         select = info.expression
@@ -91,7 +94,6 @@ def check_joins(
                 continue
             on = join.args.get("on")
             kind = (join.kind or "").upper()
-            (join.side or "").upper()
             alias_l = joined_alias.lower() if joined_alias else None
 
             if on is None:
@@ -170,7 +172,7 @@ def _column_is_constrained(
 
 
 def check_partition_filters(
-    tree: exp.Expression, index: CatalogIndex, policy: Policy, dialect: str
+    tree: exp.Expression, index: CatalogIndex, policy: Policy, dialect: str, scope_index=None
 ) -> tuple[list[Violation], dict[int, bool]]:
     """For every partitioned-table reference, is any partition column constrained?
 
@@ -182,7 +184,10 @@ def check_partition_filters(
     require = policy.effective_require_partition_filter(dialect)
     violations: list[Violation] = []
     flags: dict[int, bool] = {}
-    infos, _, _ = build_scope_maps(tree, index)
+    if scope_index is not None:
+        infos = scope_index.infos
+    else:
+        infos, _, _ = build_scope_maps(tree, index)
 
     for info in infos:
         select = info.expression
@@ -285,6 +290,7 @@ class EstimateInputs:
     policy: Policy
     dialect: str
     partition_flags: dict[int, bool] = field(default_factory=dict)
+    scope_index: Any = None  # sqlguard.scopeindex.ScopeIndex, when the guard shares one
 
 
 class CostEstimator(Protocol):
@@ -314,8 +320,13 @@ class HeuristicCostEstimator:
     ) -> tuple[CostEstimate | None, list[Violation]]:
         index, policy, dialect = inputs.index, inputs.policy, inputs.dialect
         violations: list[Violation] = []
-        referenced = collect_referenced_columns(inputs.tree, index)
-        infos, _, _ = build_scope_maps(inputs.tree, index)
+        referenced = collect_referenced_columns(
+            inputs.tree, index, scope_index=inputs.scope_index
+        )
+        if inputs.scope_index is not None:
+            infos = inputs.scope_index.infos
+        else:
+            infos, _, _ = build_scope_maps(inputs.tree, index)
 
         per_table: list[TableScanEstimate] = []
         total_bytes = 0

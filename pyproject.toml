@@ -57,7 +57,8 @@ include = ["src/sqlguard", "tests", "examples", "README.md", "LICENSE"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-q"
+addopts = "-q --ignore=tests/integration"
+markers = ["integration: requires a live database (SQLGUARD_PG_URL)"]
 
 [tool.ruff]
 line-length = 100

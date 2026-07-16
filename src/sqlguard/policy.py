@@ -164,6 +164,15 @@ class Policy:
     check_joins: bool = True
     strict_joins: bool = False  # escalate join heuristics to errors
 
+    # Enforcement. "block" (default) fails validation on any ERROR.
+    # "log_only" (shadow mode) keeps semantic/policy errors as recorded
+    # violations but lets the (rewritten) query through with
+    # result.would_block=True, so a deployment can measure its would-block
+    # rate before enforcing. Hard-stop classes — anything that leaves nothing
+    # sane to execute (non-SELECT statements, parse failures, nested writes,
+    # locking clauses, internal errors) — always block, even in shadow mode.
+    enforcement: str = "block"  # block | log_only
+
     # Output
     pretty_sql: bool = False
 
@@ -174,6 +183,8 @@ class Policy:
                     "v1 supports read-only SELECT policies; allowed_statements "
                     f"may only contain 'select', got {s!r}"
                 )
+        if self.enforcement not in ("block", "log_only"):
+            raise PolicyError("enforcement must be 'block' or 'log_only'")
         if self.rls_strategy not in _VALID_RLS_STRATEGIES:
             raise PolicyError(f"rls_strategy must be one of {_VALID_RLS_STRATEGIES}")
         if self.on_conflicting_tenant_filter not in _VALID_CONFLICT_MODES:

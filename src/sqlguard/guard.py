@@ -43,6 +43,21 @@ _DIALECT_ALIASES = {
     "awsathena": "athena",
 }
 
+# Violations that leave nothing sane to execute; they block even under
+# Policy(enforcement="log_only") shadow mode.
+_HARD_STOP_CODES = frozenset(
+    {
+        Code.PARSE_ERROR,
+        Code.MULTIPLE_STATEMENTS,
+        Code.DISALLOWED_STATEMENT,
+        Code.DISALLOWED_COMMAND,
+        Code.NESTED_WRITE,
+        Code.SELECT_INTO,
+        Code.LOCKING_CLAUSE,
+        Code.INTERNAL_ERROR,
+    }
+)
+
 
 class SQLGuard:
     """Validate, constrain, and rewrite LLM-generated SQL before execution.
@@ -160,7 +175,22 @@ class SQLGuard:
 
         def finalize(tree: exp.Expression | None) -> ValidationResult:
             skipped.extend(c for c in all_checks if c not in run and c not in skipped)
-            valid = not any(v.is_error for v in violations)
+            has_errors = any(v.is_error for v in violations)
+            valid = not has_errors
+            would_block = False
+            if (
+                has_errors
+                and policy.enforcement == "log_only"
+                and tree is not None
+                and not any(v.code in _HARD_STOP_CODES for v in violations if v.is_error)
+            ):
+                # Shadow mode: record everything, block nothing blockable-only.
+                # Rewrites (RLS, limits, column drops) were still applied — the
+                # query runs protected; would_block carries the truth for
+                # measurement. Hard-stop classes never reach here (tree is
+                # None or their codes match).
+                valid = True
+                would_block = True
             out_sql = None
             if valid and tree is not None:
                 out_sql = tree.sql(dialect=dialect, pretty=policy.pretty_sql)
@@ -172,6 +202,7 @@ class SQLGuard:
                 violations=violations,
                 rewrites=rewrites,
                 stats=stats,
+                would_block=would_block,
             )
 
         # 1. parse ---------------------------------------------------------

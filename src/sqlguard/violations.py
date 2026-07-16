@@ -210,6 +210,10 @@ class ValidationResult:
     violations: list[Violation] = field(default_factory=list)
     rewrites: list[Rewrite] = field(default_factory=list)
     stats: QueryStats = field(default_factory=QueryStats)
+    # True only under Policy(enforcement="log_only") when the query carries
+    # ERROR violations that WOULD block in enforcing mode. valid is True in
+    # that case; use this flag to measure shadow-mode block rates.
+    would_block: bool = False
 
     # -- convenience -------------------------------------------------------
 
@@ -235,6 +239,7 @@ class ValidationResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "valid": self.valid,
+            "would_block": self.would_block,
             "sql": self.sql,
             "original_sql": self.original_sql,
             "dialect": self.dialect,
@@ -256,7 +261,13 @@ class ValidationResult:
         lines: list[str] = []
         errors = self.errors
         warnings = self.warnings
-        if self.valid:
+        if self.valid and self.would_block:
+            lines.append(
+                f"The SQL was allowed (shadow mode) but would be BLOCKED in "
+                f"enforcing mode: {len(errors)} error(s)"
+                + (f", {len(warnings)} warning(s)." if warnings else ".")
+            )
+        elif self.valid:
             lines.append(
                 f"The SQL passed validation with {len(warnings)} warning(s)."
             )

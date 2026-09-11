@@ -65,6 +65,7 @@ def guard(engine):
         Policy(
             rls=[RLSRule(table="sg_orders", column="customer_id", param="tenant")],
             default_limit=500,
+            strict_joins=True,
             on_missing_stats="ignore",
         ),
         dialect="postgres",

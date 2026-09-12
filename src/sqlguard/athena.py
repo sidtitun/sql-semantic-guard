@@ -23,7 +23,7 @@ _ROW_KEYS = ("numRows", "recordCount", "numrows")
 _BYTE_KEYS = ("totalSize", "rawDataSize", "sizeKey")
 
 
-def _int_param(params: dict, keys: tuple) -> int | None:
+def _int_param(params: dict[str, Any], keys: tuple[str, ...]) -> int | None:
     for key in keys:
         raw = params.get(key)
         if raw is None:

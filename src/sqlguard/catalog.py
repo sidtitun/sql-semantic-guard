@@ -44,7 +44,7 @@ class Column:
     name: str
     type: str = "unknown"
     nullable: bool = True
-    tags: frozenset = frozenset()
+    tags: frozenset[str] = frozenset()
     comment: str | None = None
     avg_width: int | None = None  # average serialized width in bytes
 
@@ -66,7 +66,7 @@ class Table:
     total_bytes: int | None = None
     partition_columns: tuple[str, ...] = ()
     columnar: bool | None = None  # None = decide by dialect (Athena => True)
-    tags: frozenset = frozenset()
+    tags: frozenset[str] = frozenset()
     comment: str | None = None
 
     def __post_init__(self) -> None:

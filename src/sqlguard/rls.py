@@ -21,7 +21,7 @@ or being prompt-injected — to read another tenant's rows).
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlglot import exp
 
@@ -36,6 +36,9 @@ from sqlguard.violations import (
     Violation,
 )
 
+if TYPE_CHECKING:
+    from sqlguard.scopeindex import ScopeIndex
+
 _CONFLICT_SEVERITY = {
     "error": Severity.ERROR,
     "warn": Severity.WARNING,
@@ -46,7 +49,7 @@ def _conjuncts(condition: exp.Expression | None) -> list[exp.Expression]:
     if condition is None:
         return []
     if isinstance(condition, exp.And):
-        return list(condition.flatten())
+        return [cast(exp.Expression, item) for item in condition.flatten()]
     return [condition]
 
 
@@ -84,23 +87,27 @@ def _column_matches(
     return sole_source
 
 
-def _convert_value(value: Any) -> exp.Expression | None:
+class _InValues(list[exp.Expression]):
+    """Typed marker distinguishing an IN-list from a scalar expression."""
+
+
+def _convert_value(value: Any) -> exp.Expression | _InValues | None:
     try:
         if isinstance(value, (list, tuple, set, frozenset)):
-            items = [exp.convert(v) for v in value]
+            items = _InValues(cast(exp.Expression, exp.convert(v)) for v in value)
             if not items:
                 return None
-            return items  # type: ignore[return-value]  # marker for IN
-        return exp.convert(value)
+            return items
+        return cast(exp.Expression, exp.convert(value))
     except Exception:
         return None
 
 
 def _build_predicate(
-    alias: str, column: str, value_expr: Any
+    alias: str, column: str, value_expr: exp.Expression | _InValues
 ) -> exp.Expression:
     col_ref = exp.column(column, table=alias)
-    if isinstance(value_expr, list):
+    if isinstance(value_expr, _InValues):
         return exp.In(this=col_ref, expressions=[v.copy() for v in value_expr])
     return col_ref.eq(value_expr.copy() if isinstance(value_expr, exp.Expression) else value_expr)
 
@@ -111,7 +118,7 @@ def apply_rls(
     policy: Policy,
     params: Mapping[str, Any],
     dialect: str,
-    scope_index=None,
+    scope_index: ScopeIndex | None = None,
 ) -> tuple[list[Violation], list[Rewrite]]:
     if not policy.rls:
         return [], []
@@ -125,7 +132,7 @@ def apply_rls(
 
     # (info, alias, source-node, [predicates]) queued for injection
     injections: list[tuple[ScopeInfo, str, exp.Expression, list[exp.Expression]]] = []
-    config_reported = set()
+    config_reported: set[tuple[str, ...]] = set()
 
     for info in infos:
         if not info.sources:
@@ -183,9 +190,9 @@ def apply_rls(
                         continue
 
                 if not have_value and not policy.rls_parameterize:
-                    key = ("missing_param", rule.param_name)
-                    if key not in config_reported:
-                        config_reported.add(key)
+                    missing_key = ("missing_param", rule.param_name)
+                    if missing_key not in config_reported:
+                        config_reported.add(missing_key)
                         violations.append(
                             Violation(
                                 Code.RLS_PARAM_MISSING,
@@ -339,9 +346,9 @@ def _inject(
     if policy.rls_strategy == "subquery" or not isinstance(select, exp.Select):
         return wrap()
 
-    parent: exp.Expression | None = node.parent
+    parent: exp.Expression | None = node.parent  # type: ignore[assignment]
     while parent is not None and not isinstance(parent, (exp.From, exp.Join)):
-        parent = parent.parent
+        parent = parent.parent  # type: ignore[assignment]
 
     if isinstance(parent, exp.Join):
         side = (parent.side or "").upper()

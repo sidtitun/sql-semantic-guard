@@ -41,6 +41,8 @@ class Code(str, Enum):
     ALIAS_MISUSE = "alias_misuse"
     TYPE_MISMATCH = "type_mismatch"
     SEMANTIC_ERROR = "semantic_error"
+    GROUP_BY_VIOLATION = "group_by_violation"
+    AGGREGATE_IN_WHERE = "aggregate_in_where"
 
     # Column-level policy
     COLUMN_DENIED = "column_denied"

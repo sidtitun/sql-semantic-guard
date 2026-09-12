@@ -143,6 +143,7 @@ violations up front — prevention beats repair.
 | Function gate | `pg_sleep(10)`, `pg_read_file(…)`, `lo_export(…)` | `forbidden_function` |
 | Semantic binding | `SELECT amont FROM orderz`; `SELECT customer_id FROM a JOIN b …` (ambiguous); `WHERE alias_from_select > 1` | `unknown_table`, `unknown_column`, `ambiguous_column`, `alias_misuse` |
 | Type checks | `WHERE amount = 'expensive'`; `WHERE created_at > 'last tuesday'` | `type_mismatch` |
+| Aggregation checks | `SELECT status, SUM(amount) FROM orders`; `WHERE SUM(amount) > 10` | `group_by_violation`, `aggregate_in_where` |
 | Relationship checks | `orders.id = customers.id` when the declared FK is `orders.customer_id = customers.id` | `invalid_join_path` |
 | Column policy | `SELECT ssn …`; `SELECT * …` (drops `ssn`) | `column_denied` |
 | Row-level security | missing tenant scope; `WHERE customer_id = <other tenant>` | `missing_tenant_filter`, `tenant_filter_conflict` |

@@ -125,6 +125,13 @@ index)`), post-qualification, per SELECT scope:
 dependency (postgres pass / athena flag); window function not misclassified;
 `HAVING count(*) > 1` clean; aggregate-in-where; CTE scopes independent.
 
+**Outcome (implemented 2026-09-12).** Aggregation validation now runs on each
+qualified scope, rejects ungrouped projections and aggregates in WHERE/JOIN
+conditions, checks HAVING/ORDER BY, resolves ordinal grouping, distinguishes
+window functions, and applies PostgreSQL-only primary-key functional
+dependency. It is enabled by default and can be disabled independently for a
+staged compatibility rollout.
+
 ## 1.3 Nested-type modeling (P1, 4 d)
 
 **Today.** `payload.referrer` is *tolerated* via the struct-plausibility

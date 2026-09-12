@@ -220,30 +220,3 @@ def test_rls_predicate_reaches_every_orders_scope(sql):
             ) or f"{alias}.customer_id = 7" in texts, (
                 f"unfiltered orders reference (alias {alias!r}) in: {result.sql}"
             )
-
-
-# -- regression corpus: crashes found by fuzzing become permanent tests ------------
-
-
-REGRESSION_CORPUS = [
-    # seed entries; extend with minimized failures from nightly runs
-    "",
-    ";;;",
-    "(((((SELECT 1)))))",
-    "SELECT",
-    "SELECT * FROM",
-    "WITH x AS (SELECT 1)",
-    "SELECT * FROM orders LIMIT 'ten'",
-    # Minimized from nightly fuzz run 34453248872.
-    "SELECT!0FROM\"oRDERS\"JOIN\"CUSTOMERS\"ON?.':'()LIMIT!0",
-]
-
-
-def test_regression_corpus_never_crashes():
-    for sql in REGRESSION_CORPUS:
-        result = GUARD.validate(sql, params=PARAMS)
-        if not result.valid:
-            assert result.sql is None
-            continue
-        tree = sqlglot.parse_one(result.sql, read="postgres")
-        assert statement_gate(tree, "postgres") == []

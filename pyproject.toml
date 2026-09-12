@@ -35,13 +35,13 @@ classifiers = [
     "Topic :: Security",
     "Typing :: Typed",
 ]
-dependencies = ["sqlglot>=25.0"]
+dependencies = ["sqlglot>=30.18,<31"]
 
 [project.optional-dependencies]
 postgres = ["sqlalchemy>=2.0"]
 athena = ["boto3>=1.28"]
 all = ["sqlalchemy>=2.0", "boto3>=1.28"]
-dev = ["pytest>=7.4", "pytest-cov>=4.1", "hypothesis>=6.100", "ruff>=0.4", "mypy>=1.8", "sqlalchemy>=2.0"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "hypothesis>=6.100", "ruff>=0.4", "mypy>=1.8,<2", "sqlalchemy>=2.0"]
 
 [project.urls]
 Homepage = "https://github.com/sidtitun/sql-semantic-guard"
@@ -77,4 +77,4 @@ python_version = "3.9"
 packages = ["sqlguard"]
 mypy_path = "src"
 ignore_missing_imports = true
-warn_unused_ignores = false
+strict = true

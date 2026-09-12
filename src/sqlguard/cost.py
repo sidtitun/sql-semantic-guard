@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sqlglot import exp
 
@@ -31,6 +31,9 @@ from sqlguard.violations import (
     Violation,
 )
 
+if TYPE_CHECKING:
+    from sqlguard.scopeindex import ScopeIndex
+
 # ---------------------------------------------------------------------------
 # Join sanity
 # ---------------------------------------------------------------------------
@@ -45,7 +48,11 @@ def _aliases_in(condition: exp.Expression) -> set[str]:
 
 
 def check_joins(
-    tree: exp.Expression, index: CatalogIndex, policy: Policy, dialect: str, scope_index=None
+    tree: exp.Expression,
+    index: CatalogIndex,
+    policy: Policy,
+    dialect: str,
+    scope_index: ScopeIndex | None = None,
 ) -> list[Violation]:
     """Heuristics for the classic LLM join failures.
 
@@ -79,7 +86,11 @@ def check_joins(
         where_conjuncts: list[exp.Expression] = []
         if where is not None:
             cond = where.this
-            where_conjuncts = list(cond.flatten()) if isinstance(cond, exp.And) else [cond]
+            where_conjuncts = (
+                [cast(exp.Expression, item) for item in cond.flatten()]
+                if isinstance(cond, exp.And)
+                else [cast(exp.Expression, cond)]
+            )
 
         for join in joins:
             joined = join.this
@@ -172,7 +183,11 @@ def _column_is_constrained(
 
 
 def check_partition_filters(
-    tree: exp.Expression, index: CatalogIndex, policy: Policy, dialect: str, scope_index=None
+    tree: exp.Expression,
+    index: CatalogIndex,
+    policy: Policy,
+    dialect: str,
+    scope_index: ScopeIndex | None = None,
 ) -> tuple[list[Violation], dict[int, bool]]:
     """For every partitioned-table reference, is any partition column constrained?
 
@@ -235,7 +250,7 @@ def check_partition_filters(
 # Heuristic scan estimation
 # ---------------------------------------------------------------------------
 
-_TYPE_WIDTHS: dict[exp.DataType.Type, int] = {}
+_TYPE_WIDTHS: dict[Any, int] = {}
 
 
 def _init_widths() -> None:
@@ -354,11 +369,12 @@ class HeuristicCostEstimator:
                 if columnar and table.columns:
                     refs = referenced.get(key, ALL_COLUMNS)
                     if refs is not ALL_COLUMNS:
+                        assert isinstance(refs, set)
                         all_width = sum(
                             _column_width(index, table, c.name) for c in table.columns
                         )
                         ref_width = sum(
-                            _column_width(index, table, c) for c in refs  # type: ignore[union-attr]
+                            _column_width(index, table, c) for c in refs
                         )
                         ratio = max(ref_width / all_width if all_width else 1.0, 0.02)
                 est.column_ratio = round(ratio, 4)

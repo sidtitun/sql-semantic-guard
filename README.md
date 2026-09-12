@@ -218,8 +218,9 @@ least-privilege database credentials — keep those too.
 
 ```bash
 pip install -e '.[dev,all]'
-pytest          # 160+ tests
+pytest          # 220+ tests, with a 90% coverage gate in CI
 ruff check .
+mypy            # strict typing is blocking in CI
 ```
 
 Where this is headed: [docs/ROADMAP.md](docs/ROADMAP.md) (phased enhancement

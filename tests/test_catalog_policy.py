@@ -204,3 +204,6 @@ def test_validate_or_raise(guard):
     with pytest.raises(ValidationFailed) as exc:
         guard.validate_or_raise("DELETE FROM orders", params={"customer_id": 1})
     assert exc.value.result.errors
+
+    valid = guard.validate_or_raise("SELECT id FROM orders", params={"customer_id": 1})
+    assert valid.valid

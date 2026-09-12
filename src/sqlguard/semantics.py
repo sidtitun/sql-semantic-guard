@@ -16,6 +16,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING, cast
 
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
@@ -26,6 +27,9 @@ from sqlglot.optimizer.scope import Scope, ScopeType, traverse_scope
 from sqlguard.catalog import CatalogIndex, Table
 from sqlguard.policy import Policy
 from sqlguard.violations import Code, Severity, Violation
+
+if TYPE_CHECKING:
+    from sqlguard.scopeindex import ScopeIndex
 
 STAR_MARK = "sqlguard_star"
 
@@ -74,13 +78,14 @@ class ScopeInfo:
 
     @property
     def expression(self) -> exp.Expression:
-        return self.scope.expression
+        return cast(exp.Expression, self.scope.expression)
 
 
 def _derived_outputs(source_scope: Scope) -> set[str] | None:
     """Output column names of a CTE/derived table; None when unknowable."""
     try:
-        names = source_scope.expression.named_selects
+        expression = cast(exp.Expression, source_scope.expression)
+        names = getattr(expression, "named_selects", None)
     except Exception:
         return None
     if not names or any(n == "*" for n in names):
@@ -118,7 +123,10 @@ def build_scope_maps(
                 table, hint = index.resolve(source.name, source.db)
                 if table is not None:
                     info.sources[alias_norm] = Source(
-                        alias=alias_norm, kind=SourceKind.TABLE, node=node, table=table
+                        alias=alias_norm,
+                        kind=SourceKind.TABLE,
+                        node=cast(exp.Expression, node),
+                        table=table,
                     )
                     key = (
                         index.normalize(table.schema) if table.schema else None,
@@ -140,17 +148,25 @@ def build_scope_maps(
                             )
                         )
                     info.sources[alias_norm] = Source(
-                        alias=alias_norm, kind=SourceKind.UNKNOWN_TABLE, node=node
+                        alias=alias_norm,
+                        kind=SourceKind.UNKNOWN_TABLE,
+                        node=cast(exp.Expression, node),
                     )
             elif isinstance(source, Scope):
                 outputs = _derived_outputs(source)
                 kind = SourceKind.DERIVED if outputs is not None else SourceKind.DERIVED_OPAQUE
                 info.sources[alias_norm] = Source(
-                    alias=alias_norm, kind=kind, node=node, outputs=outputs, scope=source
+                    alias=alias_norm,
+                    kind=kind,
+                    node=cast(exp.Expression, node),
+                    outputs=outputs,
+                    scope=source,
                 )
             else:
                 info.sources[alias_norm] = Source(
-                    alias=alias_norm, kind=SourceKind.OTHER, node=node
+                    alias=alias_norm,
+                    kind=SourceKind.OTHER,
+                    node=cast(exp.Expression, node),
                 )
         by_scope_id[id(scope)] = info
         infos.append(info)
@@ -468,18 +484,17 @@ def qualify_tree(
     passes work on the unqualified tree (checks that need types are skipped).
     """
     working = tree.copy()
-    kwargs = dict(
-        schema=index.mapping_schema(),
-        dialect=dialect,
-        expand_stars=policy.expand_star,
-        validate_qualify_columns=True,
-        quote_identifiers=False,
-        identify=False,
-    )
-    if index.has_schemas and index.default_schema:
-        kwargs["db"] = index.default_schema
     try:
-        qualified = qualify(working, **kwargs)
+        qualified = qualify(
+            working,
+            schema=index.mapping_schema(),
+            dialect=dialect,
+            db=index.default_schema if index.has_schemas else None,
+            expand_stars=policy.expand_star,
+            validate_qualify_columns=True,
+            quote_identifiers=False,
+            identify=False,
+        )
         return qualified, True, None
     except SqlglotError as e:
         msg = str(e).split("\n", 1)[0]
@@ -712,7 +727,9 @@ ALL_COLUMNS = None  # sentinel: every column of the table is referenced
 
 
 def collect_referenced_columns(
-    tree: exp.Expression, index: CatalogIndex, scope_index=None
+    tree: exp.Expression,
+    index: CatalogIndex,
+    scope_index: ScopeIndex | None = None,
 ) -> dict[tuple[str | None, str], set[str] | None]:
     """Which physical columns does the (final) tree touch, per table?
 
@@ -757,9 +774,13 @@ def collect_referenced_columns(
         for col in owned_columns:
             if isinstance(col.this, exp.Star):
                 if col.table:
-                    src = _lookup_alias(info, index.normalize(col.table))
-                    if src and src.kind == SourceKind.TABLE and src.table is not None:
-                        mark_all(src.table)
+                    star_src = _lookup_alias(info, index.normalize(col.table))
+                    if (
+                        star_src
+                        and star_src.kind == SourceKind.TABLE
+                        and star_src.table is not None
+                    ):
+                        mark_all(star_src.table)
                 continue
             origin = resolve_column_origin(by_expr, info, col, index)
             if origin is not None:

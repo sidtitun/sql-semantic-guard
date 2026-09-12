@@ -37,10 +37,10 @@ jobs:
         run: ruff check src tests
 
       - name: Type check (mypy)
-        run: mypy || true  # advisory; do not fail the build on type nits
+        run: mypy
 
       - name: Test
-        run: pytest -q
+        run: pytest --cov=sqlguard --cov-fail-under=90 --cov-report=term -q
 
   package:
     runs-on: ubuntu-latest
@@ -54,6 +54,28 @@ jobs:
           python -m pip install --upgrade pip build twine
           python -m build
           twine check dist/*
+
+  parser-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        sqlglot: ["30.18.0", "latest-compatible"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install supported parser version
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          if [ "${{ matrix.sqlglot }}" = "30.18.0" ]; then
+            pip install "sqlglot==30.18.0"
+          else
+            pip install --upgrade "sqlglot<31"
+          fi
+      - name: Parser boundary and regression tests
+        run: pytest tests/test_statement_gate.py tests/test_fuzz.py tests/regressions -q
 
   benchmark:
     runs-on: ubuntu-latest

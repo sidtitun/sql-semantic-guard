@@ -9,6 +9,8 @@ opaque means unverifiable, and unverifiable means blocked.
 
 from __future__ import annotations
 
+from typing import cast
+
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError, TokenError
@@ -123,13 +125,13 @@ def parse_statement(
                 hint="Remove extra statements and any trailing SQL after the first semicolon.",
             )
         ]
-    root = statements[0]
+    root = cast(exp.Expression, statements[0])
     # A parenthesized SELECT parses as a Subquery root; unwrap it.
     while isinstance(root, exp.Subquery):
         inner = root.unnest()
         if inner is root:  # pragma: no cover - defensive
             break
-        root = inner
+        root = cast(exp.Expression, inner)
     return root, violations
 
 
@@ -157,7 +159,8 @@ def statement_gate(root: exp.Expression, dialect: str) -> list[Violation]:
         ]
 
     seen = set()
-    for node in root.walk():
+    for walked in root.walk():
+        node = cast(exp.Expression, walked)
         if isinstance(node, WRITE_NODES + DDL_NODES):
             key = (type(node).__name__, id(node))
             if key in seen:  # pragma: no cover
@@ -216,14 +219,15 @@ def _function_names(node: exp.Expression) -> list[str]:
 
 def function_gate(
     root: exp.Expression,
-    denylist: frozenset,
-    allowlist: frozenset | None,
+    denylist: frozenset[str],
+    allowlist: frozenset[str] | None,
     dialect: str,
 ) -> list[Violation]:
     """Enforce the function deny/allow lists."""
     violations: list[Violation] = []
     reported = set()
-    for node in root.find_all(exp.Func):
+    for found in root.find_all(exp.Func):
+        node = cast(exp.Expression, found)
         names = _function_names(node)
         if not names:
             continue

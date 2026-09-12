@@ -22,7 +22,7 @@ from sqlglot.dialects.dialect import Dialect
 from sqlguard import analyzer, cost, rewrite, rls, semantics
 from sqlguard.catalog import Catalog, CatalogIndex, match_table
 from sqlguard.errors import PolicyError, ValidationFailed
-from sqlguard.policy import Policy
+from sqlguard.policy import ColumnRule, Policy
 from sqlguard.scopeindex import ScopeIndex
 from sqlguard.violations import (
     Code,
@@ -385,9 +385,9 @@ class SQLGuard:
         lines.append("- Write exactly one read-only SELECT statement. No writes, DDL, or commands.")
         lines.append("- Only reference the tables and columns listed above.")
         if self.policy.rls:
-            cols = sorted({r.column for r in self.policy.rls})
+            rls_columns = sorted({r.column for r in self.policy.rls})
             lines.append(
-                f"- Row-level security on {', '.join(cols)} is applied automatically; "
+                f"- Row-level security on {', '.join(rls_columns)} is applied automatically; "
                 "do not add those filters yourself."
             )
         if self.policy.default_limit:
@@ -421,7 +421,7 @@ class SQLGuard:
             )
         return "\n".join(lines)
 
-    def _resolve_denied_columns(self, denied) -> list[str]:
+    def _resolve_denied_columns(self, denied: Sequence[ColumnRule]) -> list[str]:
         """Concrete ``table.column`` names matched by wildcard/tag deny rules."""
         from sqlguard.catalog import match_table
         from sqlguard.rewrite import _rule_matches

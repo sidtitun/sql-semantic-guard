@@ -6,6 +6,23 @@
 > phase has no new user-facing features by design — it converts the v1 review's
 > ⚠️ items into ✅ before feature work widens the surface.
 
+## Implementation status (2026-09-12)
+
+The repository now enforces the automated Phase 0 gates: 221 tests, 90% total
+coverage, adapter coverage above 90%, strict mypy, Ruff, live PostgreSQL,
+minimum/latest-compatible sqlglot checks, calibrated latency checks, final-SQL
+audit, idempotence properties, and a permanent minimized failure corpus.
+
+The remaining exit criteria are operational rather than code changes:
+
+- accumulate 14 consecutive green scheduled fuzz runs;
+- configure PyPI trusted publishing and publish v0.2.0;
+- protect `main` and make the CI/fuzz checks required in repository settings.
+
+Parser upgrades are security changes. The supported range is intentionally
+bounded to `sqlglot>=30.18,<31`; widening it requires both compatibility lanes
+and the extended fuzz profile to pass.
+
 ## Sequencing
 
 ```
@@ -199,8 +216,8 @@ releasing is `git tag v0.2.0 && git push --tags`.
 
 ## Definition of done (phase)
 
-- [ ] Coverage: overall ≥90%, adapters ≥90%
+- [x] Coverage: overall ≥90%, adapters ≥90%
 - [ ] Nightly fuzz green for 7 consecutive days
 - [ ] Medium-query E2E ≤3.5 ms; bench gate required on PRs
-- [ ] mypy strict required; ruff required (already)
+- [x] mypy strict required; ruff required
 - [ ] v0.2.0 on PyPI with changelog and frozen-codes policy published

@@ -8,6 +8,7 @@ to run on machine-generated SQL.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from sqlglot import exp
 
@@ -27,13 +28,16 @@ from sqlguard.violations import (
     Violation,
 )
 
+if TYPE_CHECKING:
+    from sqlguard.scopeindex import ScopeIndex
+
 
 def _rule_matches(
     rule: ColumnRule,
     index: CatalogIndex,
     table: Table | None,
     column_name: str,
-    column_tags: frozenset,
+    column_tags: frozenset[str],
 ) -> bool:
     import fnmatch
 
@@ -58,7 +62,7 @@ def _matching_rules(
     column_name: str,
 ) -> list[ColumnRule]:
     table: Table | None = None
-    tags: frozenset = frozenset()
+    tags: frozenset[str] = frozenset()
     if origin is not None:
         table = origin[0]
         col = table.column(origin[1])
@@ -73,7 +77,7 @@ def apply_column_rules(
     index: CatalogIndex,
     policy: Policy,
     dialect: str,
-    scope_index=None,
+    scope_index: ScopeIndex | None = None,
 ) -> tuple[list[Violation], list[Rewrite]]:
     """Enforce ColumnRules.
 
@@ -109,7 +113,7 @@ def apply_column_rules(
     def item_root(col: exp.Column) -> exp.Expression | None:
         node: exp.Expression | None = col
         while node is not None and not isinstance(node.parent, exp.Select):
-            node = node.parent
+            node = node.parent  # type: ignore[assignment]
         return node
 
     seen: set[tuple[str, str]] = set()

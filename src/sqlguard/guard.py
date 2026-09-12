@@ -162,6 +162,7 @@ class SQLGuard:
         audited_sql: str | None = None
         all_checks = [
             "statement_gate",
+            "complexity_checks",
             "function_policy",
             "name_binding",
             "qualification",
@@ -222,6 +223,20 @@ class SQLGuard:
         if gate:
             # Not a plain SELECT: nothing downstream is meaningful or safe.
             return finalize(None)
+
+        # 2b. complexity gate -------------------------------------------------
+        # Run before binding/qualification so configured ceilings reject query
+        # bombs without paying for the expensive semantic pipeline. Shadow mode
+        # deliberately continues to produce the protected, runnable SQL needed
+        # to measure would-block rates.
+        if policy.complexity_limits_enabled:
+            run.append("complexity_checks")
+            stats.complexity, complexity_violations = analyzer.check_complexity(root, policy)
+            violations.extend(complexity_violations)
+            if complexity_violations and policy.enforcement == "block":
+                return finalize(root)
+        else:
+            skipped.append("complexity_checks")
 
         # 3. function policy -------------------------------------------------
         run.append("function_policy")

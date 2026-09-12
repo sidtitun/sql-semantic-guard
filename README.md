@@ -149,6 +149,7 @@ violations up front — prevention beats repair.
 | Column policy | `SELECT ssn …`; `SELECT * …` (drops `ssn`) | `column_denied` |
 | Row-level security | missing tenant scope; `WHERE customer_id = <other tenant>` | `missing_tenant_filter`, `tenant_filter_conflict` |
 | Cost & partitions | 20 GiB scan over a 1 GiB budget; Athena query with no partition filter | `scan_budget_exceeded`, `missing_partition_filter` |
+| Complexity budgets | generated query with 40 joins, excessive nesting, CTEs, UNION branches, or AST nodes | `complexity_exceeded` |
 
 ## Row-level security done correctly
 

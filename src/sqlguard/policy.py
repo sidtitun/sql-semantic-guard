@@ -159,6 +159,15 @@ class Policy:
     partition_selectivity: float = 0.1
     on_missing_stats: str = "warn"  # ignore | warn | error
 
+    # Parsed-query complexity. These cheap, pre-semantics ceilings protect the
+    # validator and downstream planners from machine-generated query bombs.
+    # None keeps the check off for backwards compatibility.
+    max_joins: int | None = None
+    max_subquery_depth: int | None = None
+    max_ctes: int | None = None
+    max_union_branches: int | None = None
+    max_expression_nodes: int | None = None
+
     # Checks
     check_types: bool = True
     check_aggregation: bool = True
@@ -194,7 +203,17 @@ class Policy:
             raise PolicyError(f"on_conflicting_tenant_filter must be one of {_VALID_CONFLICT_MODES}")
         if self.on_missing_stats not in _VALID_ON_MISSING:
             raise PolicyError(f"on_missing_stats must be one of {_VALID_ON_MISSING}")
-        for limit_name in ("default_limit", "max_limit", "max_bytes_scanned", "max_rows_scanned"):
+        for limit_name in (
+            "default_limit",
+            "max_limit",
+            "max_bytes_scanned",
+            "max_rows_scanned",
+            "max_joins",
+            "max_subquery_depth",
+            "max_ctes",
+            "max_union_branches",
+            "max_expression_nodes",
+        ):
             v = getattr(self, limit_name)
             if v is not None and v <= 0:
                 raise PolicyError(f"{limit_name} must be positive or None")
@@ -227,3 +246,17 @@ class Policy:
         if self.require_partition_filter is not None:
             return self.require_partition_filter
         return dialect == "athena"
+
+    @property
+    def complexity_limits_enabled(self) -> bool:
+        """Whether any pre-semantics query-shape ceiling is configured."""
+        return any(
+            value is not None
+            for value in (
+                self.max_joins,
+                self.max_subquery_depth,
+                self.max_ctes,
+                self.max_union_branches,
+                self.max_expression_nodes,
+            )
+        )

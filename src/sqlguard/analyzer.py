@@ -17,6 +17,72 @@ from sqlglot.errors import ParseError, TokenError
 
 from sqlguard.violations import Code, Severity, Violation
 
+_COMPLEXITY_FIELDS = {
+    "joins": "max_joins",
+    "subquery_depth": "max_subquery_depth",
+    "ctes": "max_ctes",
+    "union_branches": "max_union_branches",
+    "expression_nodes": "max_expression_nodes",
+}
+
+
+def measure_complexity(root: exp.Expression) -> dict[str, int]:
+    """Return cheap structural counters for an already parsed statement."""
+    nodes = list(root.walk())
+    joins = sum(isinstance(node, exp.Join) for node in nodes)
+    ctes = sum(isinstance(node, exp.CTE) for node in nodes)
+
+    # Count leaf branches across independent UNION trees. A UNION chain with N
+    # operators has N+1 branches; nested UNIONs belong to the same component.
+    union_nodes = [node for node in nodes if isinstance(node, exp.Union)]
+    union_roots = sum(
+        not isinstance(node.parent, exp.Union) for node in union_nodes
+    )
+    union_branches = len(union_nodes) + union_roots
+
+    subquery_depth = 0
+    for node in nodes:
+        if not isinstance(node, exp.Subquery):
+            continue
+        depth = 1
+        parent = node.parent
+        while parent is not None:
+            if isinstance(parent, exp.Subquery):
+                depth += 1
+            parent = parent.parent
+        subquery_depth = max(subquery_depth, depth)
+
+    return {
+        "joins": joins,
+        "subquery_depth": subquery_depth,
+        "ctes": ctes,
+        "union_branches": union_branches,
+        "expression_nodes": len(nodes),
+    }
+
+
+def check_complexity(
+    root: exp.Expression, limits: object
+) -> tuple[dict[str, int], list[Violation]]:
+    """Measure and enforce configured query-shape ceilings."""
+    measured = measure_complexity(root)
+    violations: list[Violation] = []
+    for metric, policy_field in _COMPLEXITY_FIELDS.items():
+        ceiling = getattr(limits, policy_field, None)
+        actual = measured[metric]
+        if ceiling is not None and actual > ceiling:
+            label = metric.replace("_", " ")
+            violations.append(
+                Violation(
+                    Code.COMPLEXITY_EXCEEDED,
+                    Severity.ERROR,
+                    f"Query {label} is {actual}, exceeding the configured maximum of {ceiling}",
+                    hint=f"Simplify the query so {label} is at most {ceiling}.",
+                    extra={"metric": metric, "actual": actual, "limit": ceiling},
+                )
+            )
+    return measured, violations
+
 
 def _existing(*names: str) -> tuple[type, ...]:
     return tuple(t for t in (getattr(exp, n, None) for n in names) if isinstance(t, type))

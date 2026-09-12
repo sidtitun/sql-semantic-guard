@@ -163,6 +163,7 @@ class Policy:
     check_types: bool = True
     check_joins: bool = True
     strict_joins: bool = False  # escalate join heuristics to errors
+    require_declared_join_paths: bool = False
 
     # Enforcement. "block" (default) fails validation on any ERROR.
     # "log_only" (shadow mode) keeps semantic/policy errors as recorded

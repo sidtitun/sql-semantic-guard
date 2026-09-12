@@ -160,6 +160,10 @@ def main() -> int:
         print(f"baseline written to {BASELINE_PATH}")
         return 0
     if args.check:
+        if args.json:
+            # Keep the exact measured values in CI logs so baseline changes can
+            # be reviewed against evidence from the same runner environment.
+            print(json.dumps(current, indent=2))
         baseline = json.loads(BASELINE_PATH.read_text())
         return check(current, baseline, args.tolerance)
     if args.json:

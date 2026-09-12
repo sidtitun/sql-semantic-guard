@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from sqlguard import Catalog, ColumnRule, Policy, RLSRule, SQLGuard
+from sqlguard import Catalog, ColumnRule, Policy, RLSRule, SQLGuard, analyzer
+from sqlguard.violations import Code
 
 
 @pytest.fixture
@@ -131,3 +132,44 @@ def test_guard_is_reusable(full_guard):
     assert "customer_id = 1" in r1.sql
     assert "customer_id = 2" in r2.sql
     assert r1.original_sql == r2.original_sql  # inputs identical
+
+
+class _RecordingEstimator:
+    def __init__(self) -> None:
+        self.called = False
+
+    def estimate(self, sql, inputs):
+        self.called = True
+        return None, []
+
+
+@pytest.mark.parametrize("enforcement", ["block", "log_only"])
+def test_failed_output_audit_blocks_before_estimators(catalog, monkeypatch, enforcement):
+    """Unverified rendered SQL must never reach an external estimator."""
+    estimator = _RecordingEstimator()
+    guard = SQLGuard(
+        catalog,
+        Policy(enforcement=enforcement, on_missing_stats="ignore"),
+        dialect="postgres",
+        estimators=[estimator],
+    )
+    real_parse = analyzer.parse_statement
+    calls = 0
+
+    def fail_final_parse(sql, dialect):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            return None, []
+        return real_parse(sql, dialect)
+
+    monkeypatch.setattr(analyzer, "parse_statement", fail_final_parse)
+    result = guard.validate("SELECT id FROM orders")
+
+    assert not result.valid
+    assert not result.would_block
+    assert result.sql is None
+    assert not estimator.called
+    assert "output_audit" in result.stats.checks_run
+    assert "cost_estimation" in result.stats.checks_skipped
+    assert any(v.code is Code.INTERNAL_ERROR for v in result.errors)

@@ -65,7 +65,6 @@ def guard(engine):
         Policy(
             rls=[RLSRule(table="sg_orders", column="customer_id", param="tenant")],
             default_limit=500,
-            strict_joins=True,
             on_missing_stats="ignore",
         ),
         dialect="postgres",
@@ -97,15 +96,32 @@ def test_rls_returns_only_tenant_rows(engine, guard):
     assert len(rows) <= 500  # LIMIT applied
 
 
-def test_explain_gate_blocks_cartesian_blowup(guard):
-    result = guard.validate(
-        "SELECT o1.id FROM sg_orders o1 CROSS JOIN sg_orders o2",
+def test_explain_gate_blocks_query_on_planner_cost(engine):
+    """Prove the live planner estimator runs and causes the rejection."""
+    catalog = catalog_from_sqlalchemy(engine, schemas=["public"])
+    explain_guard = SQLGuard(
+        catalog,
+        Policy(
+            rls=[RLSRule(table="sg_orders", column="customer_id", param="tenant")],
+            default_limit=500,
+            check_joins=False,
+            on_missing_stats="ignore",
+        ),
+        dialect="postgres",
+        estimators=[PostgresExplainEstimator(engine=engine, max_total_cost=0)],
+    )
+
+    result = explain_guard.validate(
+        "SELECT id FROM sg_orders",
         params={"tenant": 7},
     )
+
     assert not result.valid
-    assert any(
-        v.code.value in ("scan_budget_exceeded", "cartesian_join") for v in result.errors
-    ) or any(v.code.value == "scan_budget_exceeded" for v in result.errors)
+    assert result.stats.cost is not None
+    assert result.stats.cost.source == "postgres_explain"
+    assert result.stats.cost.total_cost is not None
+    assert result.stats.cost.total_cost > 0
+    assert any(v.code.value == "scan_budget_exceeded" for v in result.errors)
 
 
 def test_rewritten_sql_executes(engine, guard):

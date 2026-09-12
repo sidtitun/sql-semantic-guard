@@ -67,7 +67,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
       - name: Latency regression gate (calibrated ratios)
-        run: python benchmarks/bench_pipeline.py --check --tolerance 0.35
+        run: python benchmarks/bench_pipeline.py --check --tolerance 0.35 --json
 
   integration:
     runs-on: ubuntu-latest

@@ -655,6 +655,182 @@ def check_types(
 
 
 # ---------------------------------------------------------------------------
+# Aggregation correctness
+# ---------------------------------------------------------------------------
+
+
+def _nearest_select(node: exp.Expression) -> exp.Select | None:
+    parent = node.parent
+    while parent is not None:
+        if isinstance(parent, exp.Select):
+            return parent
+        parent = parent.parent
+    return None
+
+
+def _is_windowed_aggregate(node: exp.Expression, select: exp.Select) -> bool:
+    parent = node.parent
+    while parent is not None and parent is not select:
+        if isinstance(parent, exp.Window):
+            return True
+        parent = parent.parent
+    return False
+
+
+def _group_aggregates(expression: exp.Expression, select: exp.Select) -> list[exp.AggFunc]:
+    return [
+        aggregate
+        for aggregate in expression.find_all(exp.AggFunc)
+        if _nearest_select(cast(exp.Expression, aggregate)) is select
+        and not _is_windowed_aggregate(cast(exp.Expression, aggregate), select)
+    ]
+
+
+def _columns_outside_aggregates(
+    expression: exp.Expression, select: exp.Select
+) -> list[exp.Column]:
+    columns: list[exp.Column] = []
+    for column in expression.find_all(exp.Column):
+        if _nearest_select(column) is not select:
+            continue
+        parent = column.parent
+        inside_aggregate = False
+        while parent is not None and parent is not select:
+            if isinstance(parent, exp.AggFunc):
+                inside_aggregate = True
+                break
+            parent = parent.parent
+        if not inside_aggregate:
+            columns.append(column)
+    return columns
+
+
+def check_aggregation(
+    tree: exp.Expression,
+    index: CatalogIndex,
+    dialect: str,
+    scope_index: ScopeIndex | None = None,
+) -> list[Violation]:
+    """Reject aggregation shapes that engines would fail or misinterpret."""
+    if scope_index is not None:
+        infos = scope_index.infos
+        by_expression = scope_index.by_expression
+    else:
+        infos, by_expression = scope_infos_with_lookup(tree, index)
+
+    violations: list[Violation] = []
+    reported: set[tuple[int, str, str]] = set()
+    for info in infos:
+        select = info.expression
+        if not isinstance(select, exp.Select):
+            continue
+
+        group = select.args.get("group")
+        group_expressions = list(group.expressions) if isinstance(group, exp.Group) else []
+        group_keys: set[str] = set()
+        group_origins: set[tuple[tuple[str | None, str], str]] = set()
+        for expression in group_expressions:
+            resolved = expression
+            if isinstance(expression, exp.Literal) and not expression.is_string:
+                try:
+                    ordinal = int(expression.this)
+                except (TypeError, ValueError):
+                    ordinal = 0
+                if 1 <= ordinal <= len(select.expressions):
+                    resolved = select.expressions[ordinal - 1]
+            if isinstance(resolved, exp.Alias):
+                resolved = resolved.this
+            group_keys.add(resolved.sql(dialect=dialect))
+            for column in resolved.find_all(exp.Column):
+                origin = resolve_column_origin(by_expression, info, column, index)
+                if origin is not None:
+                    group_origins.add((index.table_key(origin[0]), index.normalize(origin[1])))
+
+        functionally_grouped: set[tuple[str | None, str]] = set()
+        if dialect == "postgres":
+            for source in info.sources.values():
+                table = source.table
+                if table is None or not table.primary_key:
+                    continue
+                key = index.table_key(table)
+                if all((key, index.normalize(column)) in group_origins for column in table.primary_key):
+                    functionally_grouped.add(key)
+
+        conditions: list[tuple[str, exp.Expression]] = []
+        where = select.args.get("where")
+        if isinstance(where, exp.Where):
+            conditions.append(("WHERE", where.this))
+        for join in select.args.get("joins") or []:
+            on = join.args.get("on")
+            if isinstance(on, exp.Expression):
+                conditions.append(("JOIN ON", on))
+        for location, condition in conditions:
+            if _group_aggregates(condition, select):
+                report_key = (id(select), Code.AGGREGATE_IN_WHERE.value, location)
+                if report_key not in reported:
+                    reported.add(report_key)
+                    violations.append(
+                        Violation(
+                            Code.AGGREGATE_IN_WHERE,
+                            Severity.ERROR,
+                            f"Aggregate functions are not allowed in {location}",
+                            hint="Move aggregate filters to HAVING.",
+                        )
+                    )
+
+        expressions_to_check = list(select.expressions)
+        having = select.args.get("having")
+        if isinstance(having, exp.Having):
+            expressions_to_check.append(having.this)
+        order = select.args.get("order")
+        if isinstance(order, exp.Order):
+            expressions_to_check.extend(order.expressions)
+
+        has_group_aggregate = any(
+            _group_aggregates(expression, select) for expression in expressions_to_check
+        )
+        if not group_expressions and not has_group_aggregate:
+            continue
+
+        select_aliases = {
+            index.normalize(item.alias): item.this
+            for item in select.expressions
+            if isinstance(item, exp.Alias) and item.alias
+        }
+        for expression in expressions_to_check:
+            unaliased = expression.this if isinstance(expression, (exp.Alias, exp.Ordered)) else expression
+            if (
+                isinstance(unaliased, exp.Column)
+                and not unaliased.table
+                and index.normalize(unaliased.name) in select_aliases
+            ):
+                unaliased = select_aliases[index.normalize(unaliased.name)]
+            if unaliased.sql(dialect=dialect) in group_keys:
+                continue
+            for column in _columns_outside_aggregates(unaliased, select):
+                column_key = column.sql(dialect=dialect)
+                if column_key in group_keys:
+                    continue
+                origin = resolve_column_origin(by_expression, info, column, index)
+                if origin is not None and index.table_key(origin[0]) in functionally_grouped:
+                    continue
+                report_key = (id(select), Code.GROUP_BY_VIOLATION.value, column_key)
+                if report_key in reported:
+                    continue
+                reported.add(report_key)
+                violations.append(
+                    Violation(
+                        Code.GROUP_BY_VIOLATION,
+                        Severity.ERROR,
+                        f"Column {column_key!r} must appear in GROUP BY or be aggregated",
+                        column=column.name,
+                        hint=f"Add {column_key} to GROUP BY or wrap it in an aggregate.",
+                    )
+                )
+    return violations
+
+
+# ---------------------------------------------------------------------------
 # Column origin resolution + referenced-column collection (used by rewrite/cost)
 # ---------------------------------------------------------------------------
 

@@ -166,6 +166,7 @@ class SQLGuard:
             "name_binding",
             "qualification",
             "type_checks",
+            "aggregation_checks",
             "column_policy",
             "row_level_security",
             "limit_enforcement",
@@ -270,7 +271,16 @@ class SQLGuard:
         # apply_rls invalidates it on the one mutation that does (subquery wraps).
         scope_index = ScopeIndex(tree, index)
 
-        # 7. column policy --------------------------------------------------------
+        # 7. aggregation correctness --------------------------------------------
+        if qualified and policy.check_aggregation:
+            run.append("aggregation_checks")
+            violations.extend(
+                semantics.check_aggregation(tree, index, dialect, scope_index=scope_index)
+            )
+        else:
+            skipped.append("aggregation_checks")
+
+        # 8. column policy --------------------------------------------------------
         run.append("column_policy")
         col_violations, col_rewrites = rewrite.apply_column_rules(
             tree, index, policy, dialect, scope_index=scope_index

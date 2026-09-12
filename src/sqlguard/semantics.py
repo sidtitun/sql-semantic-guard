@@ -718,6 +718,11 @@ def check_aggregation(
     else:
         infos, by_expression = scope_infos_with_lookup(tree, index)
 
+    # Most analytical queries are not aggregate queries. Avoid repeated
+    # per-expression walks on that hot path.
+    if tree.find(exp.Group) is None and tree.find(exp.AggFunc) is None:
+        return []
+
     violations: list[Violation] = []
     reported: set[tuple[int, str, str]] = set()
     for info in infos:

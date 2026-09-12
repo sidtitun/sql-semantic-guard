@@ -12,6 +12,7 @@ qualification.
 
 from __future__ import annotations
 
+import difflib
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -832,6 +833,89 @@ def check_aggregation(
                         hint=f"Add {column_key} to GROUP BY or wrap it in an aggregate.",
                     )
                 )
+    return violations
+
+
+def check_allowed_values(
+    tree: exp.Expression,
+    index: CatalogIndex,
+    policy: Policy,
+    dialect: str,
+    scope_index: ScopeIndex | None = None,
+) -> list[Violation]:
+    """Validate equality and IN literals against catalog enum/domain metadata."""
+    if not index.has_allowed_values:
+        return []
+    if scope_index is not None:
+        infos = scope_index.infos
+        by_expression = scope_index.by_expression
+    else:
+        infos, by_expression = scope_infos_with_lookup(tree, index)
+    info_by_select = {
+        id(info.expression): info for info in infos if isinstance(info.expression, exp.Select)
+    }
+    violations: list[Violation] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def inspect(column_expr: exp.Column, literal: exp.Expression) -> None:
+        if not isinstance(literal, exp.Literal) or not literal.is_string:
+            return
+        select = _nearest_select(column_expr)
+        info = info_by_select.get(id(select)) if select is not None else None
+        if info is None:
+            return
+        origin = resolve_column_origin(by_expression, info, column_expr, index)
+        if origin is None:
+            return
+        table, column_name = origin
+        column = table.column(column_name)
+        if column is None or column.allowed_values is None:
+            return
+        actual = literal.name
+        allowed = column.allowed_values
+        normalize = str.casefold if policy.case_insensitive_enums else (lambda value: value)
+        if normalize(actual) in {normalize(value) for value in allowed}:
+            return
+        key = (table.display_name, column.name, actual)
+        if key in seen:
+            return
+        seen.add(key)
+        matches = difflib.get_close_matches(
+            normalize(actual),
+            [normalize(value) for value in allowed],
+            n=1,
+            cutoff=0.6,
+        )
+        suggestion = None
+        if matches:
+            match = next(value for value in allowed if normalize(value) == matches[0])
+            suggestion = f" Did you mean {match!r}?"
+        shown = ", ".join(repr(value) for value in allowed[:12])
+        violations.append(
+            Violation(
+                Code.UNKNOWN_VALUE,
+                Severity.ERROR,
+                f"Value {actual!r} is not allowed for "
+                f"{table.display_name}.{column.name}.{suggestion or ''}",
+                table=table.display_name,
+                column=column.name,
+                hint=f"Allowed values: {shown}",
+                extra={"value": actual, "allowed_values": list(allowed[:12])},
+            )
+        )
+
+    for node in tree.walk():
+        if isinstance(node, (exp.EQ, exp.NEQ)):
+            left, right = node.this, node.expression
+            if isinstance(left, exp.Column):
+                inspect(left, right)
+            if isinstance(right, exp.Column):
+                inspect(right, left)
+        elif isinstance(node, exp.In) and isinstance(node.this, exp.Column):
+            if node.args.get("query") or node.args.get("unnest"):
+                continue
+            for literal in node.expressions:
+                inspect(node.this, literal)
     return violations
 
 

@@ -167,6 +167,7 @@ class SQLGuard:
             "qualification",
             "type_checks",
             "aggregation_checks",
+            "domain_checks",
             "column_policy",
             "row_level_security",
             "limit_enforcement",
@@ -279,6 +280,13 @@ class SQLGuard:
             )
         else:
             skipped.append("aggregation_checks")
+
+        run.append("domain_checks")
+        violations.extend(
+            semantics.check_allowed_values(
+                tree, index, policy, dialect, scope_index=scope_index
+            )
+        )
 
         # 8. column policy --------------------------------------------------------
         run.append("column_policy")

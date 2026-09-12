@@ -19,6 +19,38 @@ from sqlguard.catalog import Catalog, Column, ForeignKey, Table
 logger = logging.getLogger("sqlguard")
 
 
+def profile_allowed_values(
+    engine: Any,
+    table: str,
+    column: str,
+    max_distinct: int = 50,
+) -> tuple[str, ...]:
+    """Explicitly profile a low-cardinality column for enum metadata.
+
+    Identifiers are quoted through the connected SQLAlchemy dialect. The
+    extra row in LIMIT makes high-cardinality columns fail closed instead of
+    silently recording an incomplete domain.
+    """
+    if max_distinct <= 0:
+        raise ValueError("max_distinct must be positive")
+    preparer = engine.dialect.identifier_preparer
+    quoted_table = ".".join(preparer.quote(part) for part in table.split("."))
+    quoted_column = preparer.quote(column)
+    statement = (
+        f"SELECT DISTINCT {quoted_column} FROM {quoted_table} "
+        f"WHERE {quoted_column} IS NOT NULL ORDER BY {quoted_column} "
+        f"LIMIT {max_distinct + 1}"
+    )
+    with engine.connect() as connection:
+        values = [str(row[0]) for row in connection.exec_driver_sql(statement)]
+    if len(values) > max_distinct:
+        raise ValueError(
+            f"{table}.{column} has more than {max_distinct} distinct values; "
+            "refusing to treat it as an enum"
+        )
+    return tuple(values)
+
+
 def _pg_stats(engine: Any, schemas: Sequence[str]) -> dict[tuple[str, str], tuple[int | None, int | None]]:
     """(schema, table) -> (row_count, total_bytes) from pg_class estimates."""
     query = """

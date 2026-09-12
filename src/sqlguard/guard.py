@@ -159,6 +159,7 @@ class SQLGuard:
         rewrites: list[Rewrite] = []
         stats = QueryStats()
         run, skipped = stats.checks_run, stats.checks_skipped
+        audited_sql: str | None = None
         all_checks = [
             "statement_gate",
             "function_policy",
@@ -191,33 +192,7 @@ class SQLGuard:
                 # None or their codes match).
                 valid = True
                 would_block = True
-            out_sql = None
-            if valid and tree is not None:
-                out_sql = tree.sql(dialect=dialect, pretty=policy.pretty_sql)
-
-                # Treat the renderer as a security boundary. Parser recovery can
-                # occasionally build an AST whose rendered form is not valid SQL;
-                # never return such output as executable, even in shadow mode.
-                run.append("output_audit")
-                audit_root, audit_violations = analyzer.parse_statement(out_sql, dialect)
-                audit_gate = (
-                    analyzer.statement_gate(audit_root, dialect)
-                    if audit_root is not None and not audit_violations
-                    else []
-                )
-                if audit_root is None or audit_violations or audit_gate:
-                    violations.append(
-                        Violation(
-                            Code.INTERNAL_ERROR,
-                            Severity.ERROR,
-                            "Rendered SQL failed the final read-only safety audit; failing closed",
-                            hint="Regenerate the query or report this as a sqlguard bug.",
-                        )
-                    )
-                    valid = False
-                    would_block = False
-                    out_sql = None
-
+            out_sql = audited_sql if valid and tree is not None else None
             skipped.extend(c for c in all_checks if c not in run and c not in skipped)
             return ValidationResult(
                 valid=valid,
@@ -335,7 +310,30 @@ class SQLGuard:
         )
         violations.extend(part_violations)
 
-        # 12. cost estimation ---------------------------------------------------
+        # 12. final output audit -------------------------------------------------
+        # Render once, then independently parse and gate the exact SQL that will
+        # be returned and passed to external estimators such as EXPLAIN.
+        run.append("output_audit")
+        rendered = tree.sql(dialect=dialect, pretty=policy.pretty_sql)
+        audit_root, audit_violations = analyzer.parse_statement(rendered, dialect)
+        audit_gate = (
+            analyzer.statement_gate(audit_root, dialect)
+            if audit_root is not None and not audit_violations
+            else []
+        )
+        if audit_root is None or audit_violations or audit_gate:
+            violations.append(
+                Violation(
+                    Code.INTERNAL_ERROR,
+                    Severity.ERROR,
+                    "Rendered SQL failed the final read-only safety audit; failing closed",
+                    hint="Regenerate the query or report this as a sqlguard bug.",
+                )
+            )
+            return finalize(None)
+        audited_sql = rendered
+
+        # 13. cost estimation ---------------------------------------------------
         run.append("cost_estimation")
         inputs = cost.EstimateInputs(
             tree=tree,
@@ -345,7 +343,6 @@ class SQLGuard:
             partition_flags=part_flags,
             scope_index=scope_index,
         )
-        rendered = tree.sql(dialect=dialect)
         for i, estimator in enumerate(self.estimators):
             if i > 0 and any(v.is_error for v in violations):
                 break  # secondary estimators (e.g. EXPLAIN) need runnable SQL

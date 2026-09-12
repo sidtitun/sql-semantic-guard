@@ -3,7 +3,19 @@ name: Nightly fuzz
 on:
   schedule:
     - cron: "17 3 * * *"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/test_fuzz.py"
+      - "pyproject.toml"
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   fuzz:

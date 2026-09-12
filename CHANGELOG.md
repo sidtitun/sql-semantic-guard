@@ -14,6 +14,8 @@ versioning: [SemVer](https://semver.org). Violation `Code` values and
 - Shadow mode: `Policy(enforcement="log_only")` + `ValidationResult.would_block` for measured rollouts; hard-stop classes still block.
 - Live Postgres integration suite (`SQLGUARD_PG_URL`-gated) run in CI against a service container, including the end-to-end RLS row-level assertion.
 - Release automation: PyPI trusted publishing on `v*` tags.
+- Query-complexity budgets for joins, nested subqueries, CTEs, UNION branches,
+  and total expression nodes, enforced before semantic analysis.
 
 ## [0.1.0] - 2026-07-04
 

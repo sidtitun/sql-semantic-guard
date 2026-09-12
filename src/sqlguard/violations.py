@@ -64,6 +64,7 @@ class Code(str, Enum):
     SCAN_BUDGET_EXCEEDED = "scan_budget_exceeded"
     MISSING_STATISTICS = "missing_statistics"
     COST_ESTIMATION_FAILED = "cost_estimation_failed"
+    COMPLEXITY_EXCEEDED = "complexity_exceeded"
 
     # Guard internals (fail closed, never crash the caller)
     INTERNAL_ERROR = "internal_error"
@@ -186,6 +187,7 @@ class QueryStats:
     tables: list[str] = field(default_factory=list)
     referenced_columns: dict[str, list[str]] = field(default_factory=dict)
     cost: CostEstimate | None = None
+    complexity: dict[str, int] = field(default_factory=dict)
     checks_run: list[str] = field(default_factory=list)
     checks_skipped: list[str] = field(default_factory=list)
 
@@ -195,6 +197,7 @@ class QueryStats:
             "tables": list(self.tables),
             "referenced_columns": {k: list(v) for k, v in self.referenced_columns.items()},
             "cost": self.cost.to_dict() if self.cost else None,
+            "complexity": dict(self.complexity),
             "checks_run": list(self.checks_run),
             "checks_skipped": list(self.checks_skipped),
         }

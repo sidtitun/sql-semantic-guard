@@ -118,6 +118,13 @@ roles reusing the existing concurrency test pattern.
 
 ## 2.4 Complexity budgets (P1, 2 d)
 
+**Outcome (implemented 2026-09-12).** All five optional ceilings are enforced
+immediately after the read-only statement gate and before semantic analysis.
+Measured counters are exposed in `QueryStats.complexity`; violations identify
+the exact metric, measured value, and configured limit. Enforcing mode exits
+early, while shadow mode completes the protected pipeline and reports
+`would_block=True` for rollout measurement.
+
 **Design.** Cheap counters over the parsed tree, run inside the statement
 gate stage (pre-semantics — reject monsters before spending analysis time):
 `max_joins` (all scopes), `max_subquery_depth` (scope-tree depth),

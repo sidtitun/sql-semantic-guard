@@ -43,6 +43,7 @@ class Code(str, Enum):
     SEMANTIC_ERROR = "semantic_error"
     GROUP_BY_VIOLATION = "group_by_violation"
     AGGREGATE_IN_WHERE = "aggregate_in_where"
+    UNKNOWN_VALUE = "unknown_value"
 
     # Column-level policy
     COLUMN_DENIED = "column_denied"

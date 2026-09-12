@@ -202,6 +202,12 @@ refuses if >50 values — enums only, not free text).
 bad element flagged; case-insensitive mode; non-enum column unaffected;
 range predicates exempt.
 
+**Outcome (implemented 2026-09-12).** Equality, inequality, and literal IN
+predicates now enforce catalog domains with deduplicated violations,
+did-you-mean guidance, a bounded value list, and explicit case-insensitive
+mode. `profile_allowed_values()` provides opt-in, identifier-quoted discovery
+and refuses high-cardinality columns rather than recording a partial domain.
+
 ## 1.6 Derived-star resolution (P2, 3 d)
 
 **Today.** `SELECT sub.bogus FROM (SELECT * FROM orders) sub` passes: the

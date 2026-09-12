@@ -404,6 +404,11 @@ class CatalogIndex:
             self.normalize(catalog.default_schema) if catalog.default_schema else None
         )
         self.has_schemas = catalog.has_schemas
+        self.has_allowed_values = any(
+            column.allowed_values is not None
+            for table in catalog.tables
+            for column in table.columns
+        )
         self._mapping_schema: MappingSchema | None = None
         self._fk_edges: dict[
             tuple[tuple[str | None, str], tuple[str | None, str]],

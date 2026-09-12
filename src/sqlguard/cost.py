@@ -22,6 +22,7 @@ from sqlguard.semantics import (
     SourceKind,
     build_scope_maps,
     collect_referenced_columns,
+    resolve_column_origin,
 )
 from sqlguard.violations import (
     Code,
@@ -47,6 +48,94 @@ def _aliases_in(condition: exp.Expression) -> set[str]:
     }
 
 
+def _conjuncts(condition: exp.Expression) -> list[exp.Expression]:
+    if isinstance(condition, exp.And):
+        return [cast(exp.Expression, item) for item in condition.flatten()]
+    return [condition]
+
+
+def _check_declared_join_paths(
+    on: exp.Expression,
+    joined_alias: str | None,
+    info: Any,
+    by_expression: dict[int, Any],
+    index: CatalogIndex,
+    policy: Policy,
+) -> list[Violation]:
+    """Validate direct physical-column equalities against declared FK edges."""
+    if not joined_alias:
+        return []
+    alias_norm = index.normalize(joined_alias)
+    observed: dict[
+        tuple[tuple[str | None, str], tuple[str | None, str]],
+        set[tuple[str, str]],
+    ] = {}
+    tables: dict[tuple[str | None, str], Table] = {}
+    for conjunct in _conjuncts(on):
+        if not isinstance(conjunct, exp.EQ):
+            continue
+        left, right = conjunct.this, conjunct.expression
+        if not isinstance(left, exp.Column) or not isinstance(right, exp.Column):
+            continue
+        if alias_norm not in {index.normalize(left.table), index.normalize(right.table)}:
+            continue
+        if left.table and right.table and index.normalize(left.table) == index.normalize(right.table):
+            continue
+        left_origin = resolve_column_origin(by_expression, info, left, index)
+        right_origin = resolve_column_origin(by_expression, info, right, index)
+        if left_origin is None or right_origin is None:
+            continue
+        left_table, left_column = left_origin
+        right_table, right_column = right_origin
+        left_key, right_key = index.table_key(left_table), index.table_key(right_table)
+        left_col, right_col = index.normalize(left_column), index.normalize(right_column)
+        tables[left_key], tables[right_key] = left_table, right_table
+        observed.setdefault((left_key, right_key), set()).add((left_col, right_col))
+
+    violations: list[Violation] = []
+    fk_edges = index.fk_edges()
+    for (left_key, right_key), pairs in observed.items():
+        declared = fk_edges.get((left_key, right_key), [])
+        if left_key == right_key and not declared:
+            continue  # ordinary analytics self-joins are intentionally exempt
+        left_table, right_table = tables[left_key], tables[right_key]
+        if not declared:
+            if policy.require_declared_join_paths:
+                violations.append(
+                    Violation(
+                        Code.UNDECLARED_JOIN,
+                        Severity.WARNING,
+                        f"No relationship is declared between {left_table.display_name!r} "
+                        f"and {right_table.display_name!r}",
+                        table=right_table.display_name,
+                        hint="Declare a foreign key in the catalog or review this analytics join.",
+                    )
+                )
+            continue
+        if any(set(zip(local_cols, ref_cols)).issubset(pairs) for local_cols, ref_cols in declared):
+            continue
+        suggestions = []
+        for local_cols, ref_cols in declared:
+            suggestions.append(
+                " AND ".join(
+                    f"{left_table.display_name}.{local} = {right_table.display_name}.{ref}"
+                    for local, ref in zip(local_cols, ref_cols)
+                )
+            )
+        violations.append(
+            Violation(
+                Code.INVALID_JOIN_PATH,
+                Severity.ERROR if policy.strict_joins else Severity.WARNING,
+                f"Join columns do not match a declared relationship between "
+                f"{left_table.display_name!r} and {right_table.display_name!r}",
+                table=right_table.display_name,
+                hint="Declared relationship: " + " OR ".join(suggestions),
+                extra={"declared_relationships": suggestions},
+            )
+        )
+    return violations
+
+
 def check_joins(
     tree: exp.Expression,
     index: CatalogIndex,
@@ -65,8 +154,10 @@ def check_joins(
     violations: list[Violation] = []
     if scope_index is not None:
         infos = scope_index.infos
+        by_expression = scope_index.by_expression
     else:
         infos, _, _ = build_scope_maps(tree, index)
+        by_expression = {id(info.expression): info for info in infos}
 
     for info in infos:
         select = info.expression
@@ -140,6 +231,16 @@ def check_joins(
                             hint="A correct join condition links the joined table to a prior table.",
                         )
                     )
+                violations.extend(
+                    _check_declared_join_paths(
+                        cast(exp.Expression, on),
+                        joined_alias,
+                        info,
+                        by_expression,
+                        index,
+                        policy,
+                    )
+                )
             if alias_l:
                 prior.add(alias_l)
     return violations

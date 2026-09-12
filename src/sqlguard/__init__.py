@@ -25,7 +25,7 @@ Quickstart::
         llm_repair(result.feedback())
 """
 
-from sqlguard.catalog import Catalog, Column, Table
+from sqlguard.catalog import Catalog, Column, ForeignKey, Table
 from sqlguard.cost import CostEstimator, EstimateInputs, HeuristicCostEstimator
 from sqlguard.errors import CatalogError, PolicyError, SQLGuardError, ValidationFailed
 from sqlguard.guard import SQLGuard
@@ -49,6 +49,7 @@ __all__ = [
     "Catalog",
     "Table",
     "Column",
+    "ForeignKey",
     "Policy",
     "RLSRule",
     "ColumnRule",

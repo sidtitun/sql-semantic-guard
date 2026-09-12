@@ -55,6 +55,8 @@ class Code(str, Enum):
     # Cost / scan safety
     CARTESIAN_JOIN = "cartesian_join"
     SUSPICIOUS_JOIN = "suspicious_join"
+    INVALID_JOIN_PATH = "invalid_join_path"
+    UNDECLARED_JOIN = "undeclared_join"
     MISSING_PARTITION_FILTER = "missing_partition_filter"
     SCAN_BUDGET_EXCEEDED = "scan_budget_exceeded"
     MISSING_STATISTICS = "missing_statistics"

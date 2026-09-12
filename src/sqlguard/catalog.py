@@ -29,6 +29,8 @@ _TABLE_META_KEYS = {
     "columnar",
     "tags",
     "comment",
+    "primary_key",
+    "foreign_keys",
 }
 
 
@@ -47,12 +49,32 @@ class Column:
     tags: frozenset[str] = frozenset()
     comment: str | None = None
     avg_width: int | None = None  # average serialized width in bytes
+    allowed_values: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
             raise CatalogError("Column name must be non-empty")
         if not isinstance(self.tags, frozenset):
             self.tags = frozenset(self.tags)
+        if self.allowed_values is not None:
+            self.allowed_values = tuple(self.allowed_values)
+
+
+@dataclass(frozen=True)
+class ForeignKey:
+    """A declared relationship from local columns to another table's columns."""
+
+    columns: tuple[str, ...]
+    ref_table: str
+    ref_columns: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "columns", tuple(self.columns))
+        object.__setattr__(self, "ref_columns", tuple(self.ref_columns))
+        if not self.columns or not self.ref_table or not self.ref_columns:
+            raise CatalogError("ForeignKey requires columns, ref_table, and ref_columns")
+        if len(self.columns) != len(self.ref_columns):
+            raise CatalogError("ForeignKey columns and ref_columns must have equal length")
 
 
 @dataclass
@@ -68,6 +90,8 @@ class Table:
     columnar: bool | None = None  # None = decide by dialect (Athena => True)
     tags: frozenset[str] = frozenset()
     comment: str | None = None
+    primary_key: tuple[str, ...] = ()
+    foreign_keys: tuple[ForeignKey, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -75,6 +99,11 @@ class Table:
         if not isinstance(self.tags, frozenset):
             self.tags = frozenset(self.tags)
         self.partition_columns = tuple(self.partition_columns)
+        self.primary_key = tuple(self.primary_key)
+        self.foreign_keys = tuple(
+            fk if isinstance(fk, ForeignKey) else ForeignKey(**fk)
+            for fk in self.foreign_keys
+        )
         norm_cols = {c.name.lower() for c in self.columns}
         for p in self.partition_columns:
             if p.lower() not in norm_cols:
@@ -84,6 +113,17 @@ class Table:
         self._by_name: dict[str, Column] = {c.name.lower(): c for c in self.columns}
         if len(self._by_name) != len(self.columns):
             raise CatalogError(f"Table {self.name!r} has duplicate column names")
+        for column in self.primary_key:
+            if column.lower() not in self._by_name:
+                raise CatalogError(
+                    f"Primary-key column {column!r} of table {self.name!r} does not exist"
+                )
+        for fk in self.foreign_keys:
+            for column in fk.columns:
+                if column.lower() not in self._by_name:
+                    raise CatalogError(
+                        f"Foreign-key column {column!r} of table {self.name!r} does not exist"
+                    )
 
     @property
     def display_name(self) -> str:
@@ -108,6 +148,11 @@ def _parse_column_spec(name: str, spec: str | Mapping[str, Any]) -> Column:
             tags=frozenset(spec.get("tags", ())),
             comment=spec.get("comment"),
             avg_width=spec.get("avg_width"),
+            allowed_values=(
+                tuple(str(v) for v in spec["allowed_values"])
+                if spec.get("allowed_values") is not None
+                else None
+            ),
         )
     raise CatalogError(f"Invalid column spec for {name!r}: {spec!r}")
 
@@ -130,6 +175,15 @@ def _parse_table_spec(name: str, spec: Mapping[str, Any], schema: str | None) ->
             columnar=spec.get("columnar"),
             tags=frozenset(spec.get("tags", ())),
             comment=spec.get("comment"),
+            primary_key=tuple(spec.get("primary_key", ())),
+            foreign_keys=tuple(
+                ForeignKey(
+                    columns=tuple(fk.get("columns", ())),
+                    ref_table=str(fk.get("ref_table", "")),
+                    ref_columns=tuple(fk.get("ref_columns", ())),
+                )
+                for fk in spec.get("foreign_keys", ())
+            ),
         )
     # simple form: {column: type_or_spec}
     columns = [_parse_column_spec(c, s) for c, s in spec.items()]
@@ -137,7 +191,7 @@ def _parse_table_spec(name: str, spec: Mapping[str, Any], schema: str | None) ->
 
 
 # Keys a rich column spec may contain (besides "type").
-_COLUMN_META_KEYS = {"type", "nullable", "tags", "comment", "avg_width"}
+_COLUMN_META_KEYS = {"type", "nullable", "tags", "comment", "avg_width", "allowed_values"}
 
 
 def _is_column_spec(v: Any) -> bool:
@@ -191,6 +245,29 @@ class Catalog:
             if key in seen:
                 raise CatalogError(f"Duplicate table in catalog: {t.display_name!r}")
             seen.add(key)
+        by_qualified = {
+            t.display_name.lower(): t for t in self.tables
+        }
+        by_bare: dict[str, list[Table]] = {}
+        for t in self.tables:
+            by_bare.setdefault(t.name.lower(), []).append(t)
+        for table in self.tables:
+            for fk in table.foreign_keys:
+                ref = by_qualified.get(fk.ref_table.lower())
+                if ref is None:
+                    candidates = by_bare.get(fk.ref_table.lower(), [])
+                    ref = candidates[0] if len(candidates) == 1 else None
+                if ref is None:
+                    raise CatalogError(
+                        f"Foreign key on {table.display_name!r} references unknown or "
+                        f"ambiguous table {fk.ref_table!r}"
+                    )
+                for column in fk.ref_columns:
+                    if ref.column(column) is None:
+                        raise CatalogError(
+                            f"Foreign key on {table.display_name!r} references missing "
+                            f"column {ref.display_name}.{column}"
+                        )
 
     @property
     def has_schemas(self) -> bool:
@@ -266,6 +343,11 @@ class Catalog:
                         "nullable": c.nullable,
                         **({"tags": sorted(c.tags)} if c.tags else {}),
                         **({"avg_width": c.avg_width} if c.avg_width else {}),
+                        **(
+                            {"allowed_values": list(c.allowed_values)}
+                            if c.allowed_values is not None
+                            else {}
+                        ),
                     }
                     for c in t.columns
                 }
@@ -278,6 +360,17 @@ class Catalog:
                 spec["partition_columns"] = list(t.partition_columns)
             if t.columnar is not None:
                 spec["columnar"] = t.columnar
+            if t.primary_key:
+                spec["primary_key"] = list(t.primary_key)
+            if t.foreign_keys:
+                spec["foreign_keys"] = [
+                    {
+                        "columns": list(fk.columns),
+                        "ref_table": fk.ref_table,
+                        "ref_columns": list(fk.ref_columns),
+                    }
+                    for fk in t.foreign_keys
+                ]
             return spec
 
         if self.has_schemas:
@@ -312,6 +405,10 @@ class CatalogIndex:
         )
         self.has_schemas = catalog.has_schemas
         self._mapping_schema: MappingSchema | None = None
+        self._fk_edges: dict[
+            tuple[tuple[str | None, str], tuple[str | None, str]],
+            list[tuple[tuple[str, ...], tuple[str, ...]]],
+        ] | None = None
 
     def normalize(self, identifier: str) -> str:
         ident = self._sqlglot_dialect.normalize_identifier(exp.to_identifier(identifier))
@@ -400,6 +497,39 @@ class CatalogIndex:
             return dt
         except Exception:
             return None
+
+    def table_key(self, table: Table) -> tuple[str | None, str]:
+        return (
+            self.normalize(table.schema) if table.schema else None,
+            self.normalize(table.name),
+        )
+
+    def fk_edges(
+        self,
+    ) -> dict[
+        tuple[tuple[str | None, str], tuple[str | None, str]],
+        list[tuple[tuple[str, ...], tuple[str, ...]]],
+    ]:
+        """Return normalized direct FK edges in both traversal directions."""
+        if self._fk_edges is not None:
+            return self._fk_edges
+        edges: dict[
+            tuple[tuple[str | None, str], tuple[str | None, str]],
+            list[tuple[tuple[str, ...], tuple[str, ...]]],
+        ] = {}
+        for table in self.catalog.tables:
+            local_key = self.table_key(table)
+            for fk in table.foreign_keys:
+                schema, _, name = fk.ref_table.rpartition(".")
+                ref, _ = self.resolve(name if schema else fk.ref_table, schema)
+                assert ref is not None  # Catalog validates relationships at construction.
+                ref_key = self.table_key(ref)
+                local_cols = tuple(self.normalize(c) for c in fk.columns)
+                ref_cols = tuple(self.normalize(c) for c in fk.ref_columns)
+                edges.setdefault((local_key, ref_key), []).append((local_cols, ref_cols))
+                edges.setdefault((ref_key, local_key), []).append((ref_cols, local_cols))
+        self._fk_edges = edges
+        return edges
 
     def all_column_names(self, tables: Iterable[Table]) -> list[str]:
         out: list[str] = []

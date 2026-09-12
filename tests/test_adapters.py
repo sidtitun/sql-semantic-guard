@@ -302,7 +302,8 @@ def sqlite_engine():
     with engine.begin() as conn:
         conn.exec_driver_sql(
             "CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id BIGINT NOT NULL, "
-            "amount NUMERIC(10,2), status VARCHAR(32))"
+            "amount NUMERIC(10,2), status VARCHAR(32), "
+            "FOREIGN KEY(customer_id) REFERENCES customers(id))"
         )
         conn.exec_driver_sql(
             "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT)"
@@ -323,6 +324,9 @@ def test_sqlalchemy_reflection(sqlite_engine):
     assert orders.column("customer_id").nullable is False
     assert orders.column("amount").type.upper().startswith("NUMERIC")
     assert orders.columnar is False
+    assert orders.primary_key == ("id",)
+    assert orders.foreign_keys[0].columns == ("customer_id",)
+    assert orders.foreign_keys[0].ref_columns == ("id",)
 
 
 def test_sqlalchemy_reflection_excludes_views_when_asked(sqlite_engine):

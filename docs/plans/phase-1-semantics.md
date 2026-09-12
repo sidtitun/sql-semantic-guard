@@ -87,6 +87,12 @@ unless the edge itself is self-referential.
 clean; composite FK partial match flagged; self-join exempt; strict mode
 blocks; undeclared-pairs opt-in; CTE-wrapped join resolved through lineage.
 
+**Outcome (implemented 2026-09-12).** Catalog construction and SQLAlchemy
+reflection now populate validated PK/FK metadata; `CatalogIndex.fk_edges()` is
+cached and bidirectional. Direct, composite, and CTE-lineage joins are checked
+with warning-by-default behavior and strict-mode blocking. Multi-hop path
+search remains deliberately out of scope.
+
 ## 1.2 Aggregation correctness (P1, 3 d)
 
 **The failure it kills.** `SELECT status, sum(amount) FROM orders` — Postgres

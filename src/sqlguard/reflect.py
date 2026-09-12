@@ -14,7 +14,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-from sqlguard.catalog import Catalog, Column, Table
+from sqlguard.catalog import Catalog, Column, ForeignKey, Table
 
 logger = logging.getLogger("sqlguard")
 
@@ -99,6 +99,30 @@ def catalog_from_sqlalchemy(
                     )
                 )
             row_count, total_bytes = stats.get((schema, name), (None, None))
+            try:
+                pk_data = inspector.get_pk_constraint(name, schema=schema) or {}
+                primary_key = tuple(pk_data.get("constrained_columns") or ())
+            except Exception:
+                primary_key = ()
+            foreign_keys: list[ForeignKey] = []
+            try:
+                reflected_fks = inspector.get_foreign_keys(name, schema=schema) or []
+            except Exception:
+                reflected_fks = []
+            for fk in reflected_fks:
+                ref_name = fk.get("referred_table")
+                local_columns = tuple(fk.get("constrained_columns") or ())
+                ref_columns = tuple(fk.get("referred_columns") or ())
+                if not ref_name or not local_columns or not ref_columns:
+                    continue
+                ref_schema = fk.get("referred_schema") or schema
+                foreign_keys.append(
+                    ForeignKey(
+                        columns=local_columns,
+                        ref_table=f"{ref_schema}.{ref_name}" if ref_schema else ref_name,
+                        ref_columns=ref_columns,
+                    )
+                )
             tables.append(
                 Table(
                     name=name,
@@ -107,6 +131,8 @@ def catalog_from_sqlalchemy(
                     row_count=row_count,
                     total_bytes=total_bytes,
                     columnar=False,
+                    primary_key=primary_key,
+                    foreign_keys=tuple(foreign_keys),
                 )
             )
     return Catalog(tables=tables, default_schema=schemas[0] if schemas else None)

@@ -47,8 +47,8 @@ def engine():
         )
         conn.exec_driver_sql(
             "INSERT INTO sg_orders (customer_id, amount, status) "
-            "SELECT (g % 100) + 1, (g % 500)::numeric, "
-            "CASE WHEN g % 2 = 0 THEN 'shipped' ELSE 'pending' END "
+            "SELECT (g %% 100) + 1, (g %% 500)::numeric, "
+            "CASE WHEN g %% 2 = 0 THEN 'shipped' ELSE 'pending' END "
             "FROM generate_series(1, 100000) g"
         )
         conn.exec_driver_sql("ANALYZE sg_orders; ANALYZE sg_customers")
@@ -65,6 +65,7 @@ def guard(engine):
         Policy(
             rls=[RLSRule(table="sg_orders", column="customer_id", param="tenant")],
             default_limit=500,
+            strict_joins=True,
             on_missing_stats="ignore",
         ),
         dialect="postgres",

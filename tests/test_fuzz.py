@@ -234,6 +234,8 @@ REGRESSION_CORPUS = [
     "SELECT * FROM",
     "WITH x AS (SELECT 1)",
     "SELECT * FROM orders LIMIT 'ten'",
+    # Minimized from nightly fuzz run 34453248872.
+    "SELECT!0FROM\"oRDERS\"JOIN\"CUSTOMERS\"ON?.':'()LIMIT!0",
 ]
 
 
@@ -242,3 +244,6 @@ def test_regression_corpus_never_crashes():
         result = GUARD.validate(sql, params=PARAMS)
         if not result.valid:
             assert result.sql is None
+            continue
+        tree = sqlglot.parse_one(result.sql, read="postgres")
+        assert statement_gate(tree, "postgres") == []

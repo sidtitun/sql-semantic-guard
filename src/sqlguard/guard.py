@@ -171,10 +171,10 @@ class SQLGuard:
             "join_checks",
             "partition_filters",
             "cost_estimation",
+            "output_audit",
         ]
 
         def finalize(tree: exp.Expression | None) -> ValidationResult:
-            skipped.extend(c for c in all_checks if c not in run and c not in skipped)
             has_errors = any(v.is_error for v in violations)
             valid = not has_errors
             would_block = False
@@ -194,6 +194,31 @@ class SQLGuard:
             out_sql = None
             if valid and tree is not None:
                 out_sql = tree.sql(dialect=dialect, pretty=policy.pretty_sql)
+
+                # Treat the renderer as a security boundary. Parser recovery can
+                # occasionally build an AST whose rendered form is not valid SQL;
+                # never return such output as executable, even in shadow mode.
+                run.append("output_audit")
+                audit_root, audit_violations = analyzer.parse_statement(out_sql, dialect)
+                audit_gate = (
+                    analyzer.statement_gate(audit_root, dialect)
+                    if audit_root is not None and not audit_violations
+                    else []
+                )
+                if audit_root is None or audit_violations or audit_gate:
+                    violations.append(
+                        Violation(
+                            Code.INTERNAL_ERROR,
+                            Severity.ERROR,
+                            "Rendered SQL failed the final read-only safety audit; failing closed",
+                            hint="Regenerate the query or report this as a sqlguard bug.",
+                        )
+                    )
+                    valid = False
+                    would_block = False
+                    out_sql = None
+
+            skipped.extend(c for c in all_checks if c not in run and c not in skipped)
             return ValidationResult(
                 valid=valid,
                 sql=out_sql,

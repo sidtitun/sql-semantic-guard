@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sqlglot
 from sqlglot import exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import ParseError, TokenError
 
 from sqlguard.violations import Code, Severity, Violation
 
@@ -97,7 +97,7 @@ def parse_statement(
         ]
     try:
         statements = [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
-    except ParseError as e:
+    except (ParseError, TokenError) as e:
         detail = str(e).split("\n", 1)[0]
         for err in getattr(e, "errors", [])[:1]:
             line, col = err.get("line"), err.get("col")

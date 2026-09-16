@@ -145,6 +145,7 @@ violations up front — prevention beats repair.
 | Type checks | `WHERE amount = 'expensive'`; `WHERE created_at > 'last tuesday'` | `type_mismatch` |
 | Aggregation checks | `SELECT status, SUM(amount) FROM orders`; `WHERE SUM(amount) > 10` | `group_by_violation`, `aggregate_in_where` |
 | Domain checks | `WHERE status = 'shiped'` when the catalog allows `shipped` | `unknown_value` |
+| Nested/derived binding | `payload.refferer`; `SELECT sub.bogus FROM (SELECT * FROM orders) sub` | `unknown_column` |
 | Relationship checks | `orders.id = customers.id` when the declared FK is `orders.customer_id = customers.id` | `invalid_join_path` |
 | Column policy | `SELECT ssn …`; `SELECT * …` (drops `ssn`) | `column_denied` |
 | Row-level security | missing tenant scope; `WHERE customer_id = <other tenant>` | `missing_tenant_filter`, `tenant_filter_conflict` |

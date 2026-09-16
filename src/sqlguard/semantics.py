@@ -25,7 +25,7 @@ from sqlglot.optimizer.annotate_types import annotate_types
 from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import Scope, ScopeType, traverse_scope
 
-from sqlguard.catalog import CatalogIndex, Table
+from sqlguard.catalog import CatalogIndex, Column, Table
 from sqlguard.policy import Policy
 from sqlguard.violations import Code, Severity, Violation
 
@@ -82,8 +82,10 @@ class ScopeInfo:
         return cast(exp.Expression, self.scope.expression)
 
 
-def _derived_outputs(source_scope: Scope) -> set[str] | None:
-    """Output column names of a CTE/derived table; None when unknowable."""
+def _declared_derived_outputs(
+    source_scope: Scope, index: CatalogIndex
+) -> set[str] | None:
+    """Return explicit output names, leaving star-containing scopes unresolved."""
     try:
         expression = cast(exp.Expression, source_scope.expression)
         names = getattr(expression, "named_selects", None)
@@ -91,7 +93,96 @@ def _derived_outputs(source_scope: Scope) -> set[str] | None:
         return None
     if not names or any(n == "*" for n in names):
         return None
-    return {n.lower() for n in names}
+    return {index.normalize(n) for n in names}
+
+
+def _resolve_derived_outputs(
+    infos: Sequence[ScopeInfo], by_scope_id: dict[int, ScopeInfo], index: CatalogIndex
+) -> None:
+    """Resolve stars in derived sources through known physical/derived inputs."""
+    memo: dict[int, set[str] | None] = {}
+
+    def source_outputs(
+        source: Source, depth: int, visiting: set[int]
+    ) -> set[str] | None:
+        if source.kind == SourceKind.TABLE and source.table is not None:
+            return {index.normalize(column.name) for column in source.table.columns}
+        if source.scope is not None:
+            return scope_outputs(source.scope, depth + 1, visiting)
+        return None
+
+    def scope_outputs(scope: Scope, depth: int, visiting: set[int]) -> set[str] | None:
+        scope_id = id(scope)
+        if scope_id in memo:
+            return memo[scope_id]
+        if depth > 8 or scope_id in visiting:
+            return None
+        info = by_scope_id.get(scope_id)
+        if info is None:
+            return None
+        expression = info.expression
+        declared = _declared_derived_outputs(scope, index)
+        if declared is not None:
+            memo[scope_id] = declared
+            return declared
+        if not isinstance(expression, exp.Select):
+            memo[scope_id] = None
+            return None
+
+        visiting.add(scope_id)
+        outputs: set[str] = set()
+        try:
+            for item in expression.expressions:
+                star: exp.Star | None = None
+                selected_sources: list[Source]
+                if isinstance(item, exp.Star):
+                    star = item
+                    selected_sources = list(info.sources.values())
+                elif isinstance(item, exp.Column) and isinstance(item.this, exp.Star):
+                    star = item.this
+                    selected = info.sources.get(index.normalize(item.table))
+                    if selected is None:
+                        return None
+                    selected_sources = [selected]
+                else:
+                    name = item.alias_or_name
+                    if not name:
+                        return None
+                    outputs.add(index.normalize(name))
+                    continue
+
+                # Star modifiers that rename/replace/filter outputs are left
+                # opaque until their exact engine semantics are modeled.
+                if any(star.args.get(key) for key in ("replace", "rename", "ilike")):
+                    return None
+                expanded: set[str] = set()
+                for source in selected_sources:
+                    names = source_outputs(source, depth, visiting)
+                    if names is None:
+                        return None
+                    expanded.update(names)
+                excluded = star.args.get("except_") or []
+                expanded.difference_update(
+                    index.normalize(exclusion.name)
+                    for exclusion in excluded
+                    if isinstance(exclusion, exp.Expression) and exclusion.name
+                )
+                outputs.update(expanded)
+        finally:
+            visiting.remove(scope_id)
+        memo[scope_id] = outputs
+        return outputs
+
+    for info in infos:
+        for source in info.sources.values():
+            if source.scope is None:
+                continue
+            source.outputs = scope_outputs(source.scope, 0, set())
+            source.kind = (
+                SourceKind.DERIVED
+                if source.outputs is not None
+                else SourceKind.DERIVED_OPAQUE
+            )
 
 
 def build_scope_maps(
@@ -154,7 +245,7 @@ def build_scope_maps(
                         node=cast(exp.Expression, node),
                     )
             elif isinstance(source, Scope):
-                outputs = _derived_outputs(source)
+                outputs = _declared_derived_outputs(source, index)
                 kind = SourceKind.DERIVED if outputs is not None else SourceKind.DERIVED_OPAQUE
                 info.sources[alias_norm] = Source(
                     alias=alias_norm,
@@ -176,6 +267,8 @@ def build_scope_maps(
         parent = getattr(info.scope, "parent", None)
         if parent is not None:
             info.parent = by_scope_id.get(id(parent))
+
+    _resolve_derived_outputs(infos, by_scope_id, index)
 
     table_names = sorted(t.display_name for t in resolved_tables.values())
     return infos, violations, table_names
@@ -217,20 +310,143 @@ def _own_output_names(info: ScopeInfo) -> set[str]:
     return set()
 
 
-def _struct_access_plausible(info: ScopeInfo, index: CatalogIndex, alias_norm: str) -> bool:
-    """True when ``alias.x`` may be struct-member access on a local column."""
-    for src in info.sources.values():
-        if src.kind == SourceKind.TABLE and src.table is not None:
-            col = src.table.column(alias_norm)
-            if col is not None:
-                dt = index.data_type(col)
-                if dt is None or dt.this in _STRUCTY_TYPES:
-                    return True
-        elif src.kind in (SourceKind.DERIVED_OPAQUE, SourceKind.OTHER, SourceKind.UNKNOWN_TABLE):
-            return True  # can't disprove; avoid false positives
-        elif src.kind == SourceKind.DERIVED and src.outputs and alias_norm in src.outputs:
-            return True
-    return False
+def _nested_member_hint(index: CatalogIndex, member: str, members: dict[str, exp.DataType]) -> str:
+    matches = difflib.get_close_matches(index.normalize(member), list(members), n=3, cutoff=0.5)
+    fields = ", ".join(sorted(members)[:12])
+    suggestion = f" Did you mean: {', '.join(matches)}?" if matches else ""
+    return f"Available fields: {fields}.{suggestion}".rstrip()
+
+
+def _map_value_type(dtype: exp.DataType) -> exp.DataType | None:
+    if dtype.this != exp.DataType.Type.MAP or len(dtype.expressions) < 2:
+        return None
+    value = dtype.expressions[1]
+    return value if isinstance(value, exp.DataType) else None
+
+
+def _array_element_type(dtype: exp.DataType) -> exp.DataType | None:
+    if dtype.this != exp.DataType.Type.ARRAY or not dtype.expressions:
+        return None
+    element = dtype.expressions[0]
+    return element if isinstance(element, exp.DataType) else None
+
+
+def _validate_type_path(
+    dtype: exp.DataType | None,
+    steps: Sequence[tuple[str, str | None]],
+    index: CatalogIndex,
+    display: str,
+    root_members: dict[str, exp.DataType] | None = None,
+) -> Violation | None:
+    current = dtype
+    cached_members = root_members
+    for operation, value in steps:
+        if current is None or current.this in {
+            exp.DataType.Type.UNKNOWN,
+            exp.DataType.Type.OBJECT,
+            exp.DataType.Type.JSON,
+            exp.DataType.Type.JSONB,
+            exp.DataType.Type.VARIANT,
+            exp.DataType.Type.SUPER,
+        }:
+            return None
+        if operation == "index":
+            current = _array_element_type(current) or _map_value_type(current)
+            cached_members = None
+            if current is None:
+                return None
+            continue
+        assert value is not None
+        if current.this == exp.DataType.Type.MAP:
+            current = _map_value_type(current)
+            continue
+        members = cached_members or index.data_type_members(current)
+        cached_members = None
+        if members is None:
+            return Violation(
+                Code.UNKNOWN_COLUMN,
+                Severity.ERROR,
+                f"Cannot access field {value!r} on non-STRUCT expression {display!r}",
+                column=display,
+                hint="Remove the field access or correct the catalog type.",
+            )
+        member_norm = index.normalize(value)
+        if member_norm not in members:
+            return Violation(
+                Code.UNKNOWN_COLUMN,
+                Severity.ERROR,
+                f"Nested field {value!r} does not exist in {display!r}",
+                column=display,
+                hint=_nested_member_hint(index, value, members),
+            )
+        current = members[member_norm]
+    return None
+
+
+def _physical_column_matches(
+    info: ScopeInfo, index: CatalogIndex, name: str
+) -> tuple[list[tuple[Table, Column]], bool]:
+    matches: list[tuple[Table, Column]] = []
+    opaque = False
+    for source in info.sources.values():
+        if source.kind == SourceKind.TABLE and source.table is not None:
+            column = source.table.column(name)
+            if column is not None:
+                matches.append((source.table, column))
+        elif source.kind == SourceKind.DERIVED and source.outputs:
+            opaque = opaque or index.normalize(name) in source.outputs
+        else:
+            opaque = True
+    return matches, opaque
+
+
+def _resolve_struct_column(
+    info: ScopeInfo, index: CatalogIndex, column: exp.Column
+) -> tuple[bool, Violation | None]:
+    parts = [part.name for part in column.parts if part.name]
+    if len(parts) < 2:
+        return False, None
+    matches, opaque = _physical_column_matches(info, index, parts[0])
+    if len(matches) > 1:
+        return True, Violation(
+            Code.AMBIGUOUS_COLUMN,
+            Severity.ERROR,
+            f"Nested column base {parts[0]!r} is ambiguous",
+            column=parts[0],
+            hint="Qualify the source table before accessing nested fields.",
+        )
+    if len(matches) == 1 and not opaque:
+        table, catalog_column = matches[0]
+        dtype = index.data_type(catalog_column)
+        steps = [("field", part) for part in parts[1:]]
+        violation = _validate_type_path(
+            dtype,
+            steps,
+            index,
+            ".".join(parts),
+            root_members=index.struct_members(catalog_column),
+        )
+        if violation is not None:
+            violation.table = table.display_name
+        return True, violation
+    if matches or opaque:
+        return True, None
+    return False, None
+
+
+def _dot_access_parts(node: exp.Expression) -> tuple[exp.Column | None, list[tuple[str, str | None]]]:
+    if isinstance(node, exp.Column) and not node.table:
+        return node, []
+    if isinstance(node, exp.Bracket):
+        base, steps = _dot_access_parts(node.this)
+        return base, [*steps, ("index", None)]
+    if isinstance(node, exp.Dot):
+        base, steps = _dot_access_parts(node.this)
+        field = node.expression.name if isinstance(node.expression, exp.Expression) else None
+        if not field:
+            return None, []
+        return base, [*steps, ("field", field)]
+    return None, []
 
 
 def _available_aliases(info: ScopeInfo) -> str:
@@ -289,6 +505,26 @@ def columns_by_owner(
     return [(info, buckets[id(info.expression)]) for info in infos]
 
 
+def dots_by_owner(infos: Sequence[ScopeInfo]) -> list[tuple[ScopeInfo, list[exp.Dot]]]:
+    """Attribute top-level dotted-access expressions to their lexical scope."""
+    owner_by_expr_id: dict[int, ScopeInfo] = {id(i.expression): i for i in infos}
+    buckets: dict[int, list[exp.Dot]] = {id(i.expression): [] for i in infos}
+    for info in infos:
+        root = info.expression
+        for dot in root.find_all(exp.Dot):
+            if isinstance(dot.parent, exp.Dot):
+                continue
+            node = dot.parent
+            while node is not None:
+                owner = owner_by_expr_id.get(id(node))
+                if owner is not None:
+                    if owner.expression is root:
+                        buckets[id(root)].append(dot)
+                    break
+                node = node.parent
+    return [(info, buckets[id(info.expression)]) for info in infos]
+
+
 def bind_names(tree: exp.Expression, index: CatalogIndex) -> BindResult:
     """Validate every table and column reference against the catalog."""
     result = BindResult()
@@ -306,6 +542,7 @@ def bind_names(tree: exp.Expression, index: CatalogIndex) -> BindResult:
             seen.add(key)
             result.violations.append(v)
 
+    owned_dots = {id(info.expression): dots for info, dots in dots_by_owner(infos)}
     for info, owned_columns in columns_by_owner(infos):
         own_outputs: set[str] | None = None
         for col in owned_columns:
@@ -331,7 +568,10 @@ def bind_names(tree: exp.Expression, index: CatalogIndex) -> BindResult:
                 alias_norm = index.normalize(col.table)
                 src = _lookup_alias(info, alias_norm)
                 if src is None:
-                    if _struct_access_plausible(info, index, alias_norm):
+                    handled, nested_violation = _resolve_struct_column(info, index, col)
+                    if handled:
+                        if nested_violation is not None:
+                            report(nested_violation)
                         continue
                     report(
                         Violation(
@@ -358,6 +598,14 @@ def bind_names(tree: exp.Expression, index: CatalogIndex) -> BindResult:
                 elif src.kind == SourceKind.DERIVED and src.outputs is not None:
                     if name_norm not in src.outputs:
                         outs = ", ".join(sorted(src.outputs)[:12])
+                        output_matches = difflib.get_close_matches(
+                            name_norm, sorted(src.outputs), n=3, cutoff=0.5
+                        )
+                        suggestion = (
+                            f"Did you mean: {', '.join(output_matches)}? "
+                            if output_matches
+                            else ""
+                        )
                         report(
                             Violation(
                                 Code.UNKNOWN_COLUMN,
@@ -365,7 +613,7 @@ def bind_names(tree: exp.Expression, index: CatalogIndex) -> BindResult:
                                 f"Subquery/CTE {col.table!r} has no output column {col.name!r}",
                                 table=col.table,
                                 column=col.name,
-                                hint=f"Its output columns are: {outs}",
+                                hint=f"{suggestion}Its output columns are: {outs}",
                             )
                         )
                 # DERIVED_OPAQUE / UNKNOWN_TABLE / OTHER: nothing provable
@@ -453,6 +701,21 @@ def bind_names(tree: exp.Expression, index: CatalogIndex) -> BindResult:
                     hint=_suggest_from_sources(info, index, col.name),
                 )
             )
+
+        for dot in owned_dots.get(id(info.expression), []):
+            base, steps = _dot_access_parts(dot)
+            if base is None or not steps:
+                continue
+            physical_matches, opaque = _physical_column_matches(info, index, base.name)
+            if len(physical_matches) != 1 or opaque:
+                continue
+            table, catalog_column = physical_matches[0]
+            violation = _validate_type_path(
+                index.data_type(catalog_column), steps, index, dot.sql(dialect=index.dialect)
+            )
+            if violation is not None:
+                violation.table = table.display_name
+                report(violation)
     return result
 
 

@@ -6,6 +6,12 @@ versioning: [SemVer](https://semver.org). Violation `Code` values and
 
 ## [Unreleased]
 
+### Added
+- Nested STRUCT/array member validation with typo suggestions and catalog-backed
+  type propagation.
+- Recursive derived-table and CTE star resolution, closing the primary
+  unknown-output semantic fail-open path.
+
 ## [0.2.0] - 2026-09-12
 
 ### Added

@@ -159,6 +159,12 @@ heuristic — `payload.refferer` (typo) passes silently.
 with suggestion; two-level nesting; map access tolerated; unparseable struct
 falls back silently; member type mismatch flagged.
 
+**Outcome (implemented 2026-09-16).** STRUCT members are parsed and cached by
+the catalog index, validated at every known field hop, and suggested on typos.
+Nested STRUCT and array-element STRUCT access is checked; MAP keys and
+unparseable/opaque types remain tolerant to avoid false positives. Member
+types continue into sqlglot's type annotation and comparison checks.
+
 ## 1.4 Function signature checks (P2, 4 d)
 
 **Design.** Data, not code: `src/sqlguard/functions.py` holds
@@ -229,6 +235,12 @@ simultaneously (they all consume `Source.outputs`).
 **Tests:** the motivating case now fails with did-you-mean; valid member
 passes; star-over-join derived table; nested two-level star; UNNEST-backed
 derived stays tolerant; recursive CTE doesn't infinite-loop (depth cap).
+
+**Outcome (implemented 2026-09-16).** Derived and CTE stars now resolve
+recursively through catalog-backed tables and already-resolved derived
+sources, including qualified stars, explicit extra outputs, joins, exclusions,
+and two-level nesting. Genuinely opaque sources remain tolerant and recursive
+resolution is capped at eight levels.
 
 ---
 

@@ -410,6 +410,7 @@ class CatalogIndex:
             for column in table.columns
         )
         self._mapping_schema: MappingSchema | None = None
+        self._struct_members: dict[str, dict[str, exp.DataType] | None] = {}
         self._fk_edges: dict[
             tuple[tuple[str | None, str], tuple[str | None, str]],
             list[tuple[tuple[str, ...], tuple[str, ...]]],
@@ -502,6 +503,29 @@ class CatalogIndex:
             return dt
         except Exception:
             return None
+
+    def data_type_members(self, dtype: exp.DataType) -> dict[str, exp.DataType] | None:
+        """Return normalized STRUCT member types, or None for non-STRUCT types."""
+        if dtype.this != exp.DataType.Type.STRUCT:
+            return None
+        members: dict[str, exp.DataType] = {}
+        for expression in dtype.expressions:
+            if not isinstance(expression, exp.ColumnDef):
+                return None
+            kind = expression.args.get("kind")
+            if not isinstance(kind, exp.DataType):
+                return None
+            members[self.normalize(expression.name)] = kind
+        return members
+
+    def struct_members(self, column: Column) -> dict[str, exp.DataType] | None:
+        """Return cached member types for a catalog STRUCT column."""
+        if column.type not in self._struct_members:
+            dtype = self.data_type(column)
+            self._struct_members[column.type] = (
+                self.data_type_members(dtype) if dtype is not None else None
+            )
+        return self._struct_members[column.type]
 
     def table_key(self, table: Table) -> tuple[str | None, str]:
         return (

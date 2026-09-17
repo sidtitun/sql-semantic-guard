@@ -10,8 +10,9 @@ has no known fail-open gaps, and published quality claims are reproducible.
   coverage and latency gates.
 - [x] FK-aware joins, aggregation correctness, enum/domain validation, shadow
   mode, and query-complexity budgets.
-- [ ] Close semantic fail-open gaps: nested struct/array member validation,
-  derived-star resolution, and high-use function signature checks.
+- [x] Close semantic fail-open gaps for nested struct/array members and
+  derived-star resolution.
+- [ ] Add high-use function signature checks.
 - [ ] Add type-preserving column masking and expression-based RLS.
 - [ ] Add named role policy sets with monotonic composition: an overlay may
   tighten a base policy but cannot resurrect denied access.

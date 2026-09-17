@@ -180,11 +180,13 @@ def test_scalar_subquery_in_select(plain_guard):
     assert result.valid, [str(v) for v in result.errors]
 
 
-def test_derived_table_star_is_opaque_but_ok(plain_guard):
+def test_derived_table_star_resolves_catalog_columns(plain_guard):
     sql = "SELECT sub.id FROM (SELECT * FROM orders) sub"
     result = plain_guard.validate(sql)
-    # sub.* is opaque; we can't disprove sub.id, so no false positive
     assert result.valid, [str(v) for v in result.errors]
+
+    bad = plain_guard.validate("SELECT sub.bogus FROM (SELECT * FROM orders) sub")
+    assert any(v.code == Code.UNKNOWN_COLUMN for v in bad.errors)
 
 
 def test_star_expansion_lists_columns(plain_guard):

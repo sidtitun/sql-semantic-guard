@@ -480,6 +480,21 @@ class SQLGuard:
                     "- Never reference these restricted columns: "
                     + ", ".join(dict.fromkeys(descriptions))
                 )
+        masked = [r for r in self.policy.column_rules if r.action == "mask"]
+        if masked:
+            descriptions = []
+            for r in masked:
+                if r.tags:
+                    descriptions.append("any column tagged " + "/".join(sorted(r.tags)))
+                elif r.column != "*":
+                    scope = "" if r.table == "*" else f" on {r.table}"
+                    descriptions.append(f"{r.column}{scope}")
+            if descriptions:
+                lines.append(
+                    "- These projected columns are masked automatically: "
+                    + ", ".join(dict.fromkeys(descriptions))
+                    + ". Do not use them in predicates unless the policy permits it."
+                )
         parted = [t for t in self.catalog.tables if t.partition_columns]
         if parted and self.policy.effective_require_partition_filter(self.dialect):
             lines.append(

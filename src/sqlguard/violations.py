@@ -32,6 +32,7 @@ class Code(str, Enum):
     SELECT_INTO = "select_into"
     LOCKING_CLAUSE = "locking_clause"
     FORBIDDEN_FUNCTION = "forbidden_function"
+    FUNCTION_MISUSE = "function_misuse"
 
     # Semantic / catalog binding
     UNKNOWN_TABLE = "unknown_table"

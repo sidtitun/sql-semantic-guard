@@ -27,7 +27,7 @@ and fails **closed**: an invalid result never carries executable SQL.
 
 ```text
 generated SQL ──▶  ┌─────────────────────────────────────────────┐  ──▶ safe SQL
-                   │ parse → statement gate → function gate →      │      (rewritten,
+                   │ parse → statement/function gates →            │      (rewritten,
    live catalog ──▶│ name binding → qualification → type checks → │       tenant-scoped,
                    │ column policy → RLS injection → limits →      │       LIMITed)
      policy ──────▶│ join sanity → partition filters → cost        │  ──▶ or violations[]
@@ -141,6 +141,7 @@ violations up front — prevention beats repair.
 |---|---|---|
 | Statement gate | `DELETE FROM orders`; `WITH d AS (DELETE … RETURNING id) SELECT …`; `SELECT … FOR UPDATE`; `SELECT 1; DROP TABLE …` | `disallowed_statement`, `nested_write`, `locking_clause`, `multiple_statements` |
 | Function gate | `pg_sleep(10)`, `pg_read_file(…)`, `lo_export(…)` | `forbidden_function` |
+| Function signatures | `date_trunc(created_at)`, `split_part(name, '.')` | `function_misuse` |
 | Semantic binding | `SELECT amont FROM orderz`; `SELECT customer_id FROM a JOIN b …` (ambiguous); `WHERE alias_from_select > 1` | `unknown_table`, `unknown_column`, `ambiguous_column`, `alias_misuse` |
 | Type checks | `WHERE amount = 'expensive'`; `WHERE created_at > 'last tuesday'` | `type_mismatch` |
 | Aggregation checks | `SELECT status, SUM(amount) FROM orders`; `WHERE SUM(amount) > 10` | `group_by_violation`, `aggregate_in_where` |

@@ -170,6 +170,7 @@ class Policy:
 
     # Checks
     check_types: bool = True
+    check_function_signatures: bool = True
     check_aggregation: bool = True
     case_insensitive_enums: bool = False
     check_joins: bool = True

@@ -13,8 +13,9 @@ from typing import cast
 
 import sqlglot
 from sqlglot import exp
-from sqlglot.errors import ParseError, TokenError
+from sqlglot.errors import ErrorLevel, ParseError, TokenError
 
+from sqlguard.functions import signature_registry
 from sqlguard.violations import Code, Severity, Violation
 
 _COMPLEXITY_FIELDS = {
@@ -323,4 +324,81 @@ def function_gate(
                         extra={"function": display},
                     )
                 )
+    return violations
+
+
+def check_function_signatures(
+    root: exp.Expression,
+    dialect: str,
+    denylist: frozenset[str],
+    allowlist: frozenset[str] | None,
+) -> list[Violation]:
+    """Reject exact, registry-backed function arity errors.
+
+    Unknown functions and UDFs remain untouched. Argument-family checks are a
+    separate post-annotation concern because SQL coercions are approximate;
+    this pass reports only errors provable from the parsed call shape.
+    """
+    registry = signature_registry(dialect)
+    violations: list[Violation] = []
+    for found in root.find_all(exp.Func):
+        node = cast(exp.Expression, found)
+        names = _function_names(node)
+        if not names:
+            continue
+        if any(name in denylist for name in names):
+            continue
+        if allowlist is not None and not any(name in allowlist for name in names):
+            continue
+        matched = next(((name, registry[name]) for name in names if name in registry), None)
+        if matched is None:
+            continue
+        _, spec = matched
+        count = sum(1 for _ in node.iter_expressions())
+        if any(signature.accepts(count) for signature in spec.signatures):
+            continue
+        expected = [signature.render(spec.name) for signature in spec.signatures]
+        violations.append(
+            Violation(
+                Code.FUNCTION_MISUSE,
+                Severity.ERROR,
+                f"Function {spec.name}() received {count} argument(s)",
+                hint="Expected: " + " or ".join(expected),
+                extra={
+                    "function": spec.name,
+                    "dialect": dialect,
+                    "actual_arity": count,
+                    "expected_signatures": expected,
+                    "failure": "arity",
+                },
+            )
+        )
+    return violations
+
+
+def diagnose_function_signatures(
+    sql: str,
+    dialect: str,
+    denylist: frozenset[str],
+    allowlist: frozenset[str] | None,
+) -> list[Violation]:
+    """Recover known arity diagnostics from an otherwise rejected parse.
+
+    sqlglot rejects some missing required arguments during parsing. A second,
+    permissive parse is used only to improve the error message; its tree is
+    never returned, rewritten, or executed, so the primary parse remains fail
+    closed.
+    """
+    try:
+        statements = sqlglot.parse(sql, read=dialect, error_level=ErrorLevel.IGNORE)
+    except Exception:
+        return []
+    violations: list[Violation] = []
+    for statement in statements:
+        if statement is not None:
+            violations.extend(
+                check_function_signatures(
+                    cast(exp.Expression, statement), dialect, denylist, allowlist
+                )
+            )
     return violations

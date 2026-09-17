@@ -164,6 +164,7 @@ class SQLGuard:
             "statement_gate",
             "complexity_checks",
             "function_policy",
+            "function_signature_checks",
             "name_binding",
             "qualification",
             "type_checks",
@@ -213,6 +214,18 @@ class SQLGuard:
         root, parse_violations = analyzer.parse_statement(sql, dialect)
         violations.extend(parse_violations)
         if root is None:
+            if policy.check_function_signatures:
+                run.append("function_signature_checks")
+                violations.extend(
+                    analyzer.diagnose_function_signatures(
+                        sql,
+                        dialect,
+                        policy.effective_function_denylist(dialect),
+                        policy.function_allowlist,
+                    )
+                )
+            else:
+                skipped.append("function_signature_checks")
             return finalize(None)
         stats.statement = type(root).__name__.lower()
 
@@ -248,6 +261,18 @@ class SQLGuard:
                 dialect,
             )
         )
+        if policy.check_function_signatures:
+            run.append("function_signature_checks")
+            violations.extend(
+                analyzer.check_function_signatures(
+                    root,
+                    dialect,
+                    policy.effective_function_denylist(dialect),
+                    policy.function_allowlist,
+                )
+            )
+        else:
+            skipped.append("function_signature_checks")
 
         # 4. name binding -----------------------------------------------------
         run.append("name_binding")

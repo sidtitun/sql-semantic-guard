@@ -187,6 +187,12 @@ which already visits every `exp.Func`):
 hint; correct calls clean per dialect; unknown UDF untouched; variadic
 `coalesce` ok at any arity ≥1.
 
+**Progress (2026-09-17).** The registry and exact arity pass are implemented
+for a first set of shared, PostgreSQL, and Athena/Trino functions. Parse-time
+arity failures receive the same structured diagnostic through a diagnostic-only
+recovery parse whose tree is never executed. Argument-family validation and
+the expansion to roughly 100 documented functions remain as the next step.
+
 ## 1.5 Enum / domain validation (P1, 2 d)
 
 **Design.** With `Column.allowed_values` in place: during type checks (the

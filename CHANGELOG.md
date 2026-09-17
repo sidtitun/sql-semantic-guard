@@ -11,6 +11,8 @@ versioning: [SemVer](https://semver.org). Violation `Code` values and
   type propagation.
 - Recursive derived-table and CTE star resolution, closing the primary
   unknown-output semantic fail-open path.
+- Dialect-aware function arity validation with structured repair hints,
+  fail-closed parse-error diagnostics, and an explicit policy switch.
 
 ## [0.2.0] - 2026-09-12
 

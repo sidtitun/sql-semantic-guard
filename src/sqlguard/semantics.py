@@ -888,14 +888,26 @@ def _check_pair(
 _CMP_NODES = (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE)
 
 
+def annotate_query_types(
+    tree: exp.Expression, index: CatalogIndex, dialect: str
+) -> exp.Expression | None:
+    """Annotate once for all type consumers; absence means analysis was skipped."""
+    try:
+        return annotate_types(tree, schema=index.mapping_schema(), dialect=dialect)
+    except Exception:
+        return None
+
+
 def check_types(
     tree: exp.Expression, index: CatalogIndex, dialect: str
 ) -> list[Violation]:
     """Flag comparisons whose operand types cannot work on the engine."""
-    try:
-        annotated = annotate_types(tree, schema=index.mapping_schema(), dialect=dialect)
-    except Exception:
-        return []
+    annotated = annotate_query_types(tree, index, dialect)
+    return check_comparison_types(annotated, dialect) if annotated is not None else []
+
+
+def check_comparison_types(annotated: exp.Expression, dialect: str) -> list[Violation]:
+    """Check comparisons on an already annotated tree."""
     violations: list[Violation] = []
     seen: set[str] = set()
 
@@ -915,6 +927,59 @@ def check_types(
                 continue
             for item in node.expressions:
                 add(_check_pair(node.this, item, node, dialect))
+    return violations
+
+
+def check_function_types(tree: exp.Expression, dialect: str, policy: Policy) -> list[Violation]:
+    """Warn only when every modeled overload conflicts with a known argument."""
+    from sqlguard.analyzer import _function_names
+    from sqlguard.functions import TYPED_OVERLOADS, signature_registry
+
+    registry = signature_registry(dialect)
+    denied = policy.effective_function_denylist(dialect)
+    violations: list[Violation] = []
+    for node in tree.find_all(exp.Func):
+        # Anonymous/schema-qualified calls may resolve to user-defined overloads.
+        if isinstance(node, exp.Anonymous) or isinstance(node.parent, exp.Dot):
+            continue
+        names = _function_names(cast(exp.Expression, node))
+        if any(name in denied for name in names):
+            continue
+        if policy.function_allowlist is not None and not any(
+            name in policy.function_allowlist for name in names
+        ):
+            continue
+        name = node.sql_name().lower()
+        spec = registry.get(name)
+        overloads = TYPED_OVERLOADS.get(name)
+        if spec is None or not overloads:
+            continue
+        if not any(sig.accepts(len(list(node.iter_expressions()))) for sig in spec.signatures):
+            continue
+        if name == "substring" and dialect != "postgres":
+            overloads = overloads[:1]
+        conflicts = []
+        for overload in overloads:
+            mismatch = []
+            for slot, expected in zip(overload.slots, overload.families):
+                argument = node.args.get(slot)
+                if not isinstance(argument, exp.Expression):
+                    continue
+                actual = _family(argument.type)
+                # Literals may use engine-specific implicit input conversion.
+                if isinstance(argument, (exp.Literal, exp.Null, exp.Placeholder, exp.Parameter)):
+                    continue
+                if actual is not None and expected is not None and actual != expected:
+                    mismatch.append({"argument": slot, "actual": actual, "expected": expected})
+            conflicts.append(mismatch)
+        if all(conflicts):
+            violations.append(Violation(
+                Code.FUNCTION_MISUSE, Severity.WARNING,
+                f"Known argument types conflict with modeled overloads of {spec.name}()",
+                hint="Check argument types; add an explicit CAST only if the conversion is intended.",
+                extra={"function": spec.name, "dialect": dialect,
+                       "failure": "argument_type", "overload_conflicts": conflicts},
+            ))
     return violations
 
 

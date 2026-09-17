@@ -7,6 +7,9 @@ versioning: [SemVer](https://semver.org). Violation `Code` values and
 ## [Unreleased]
 
 ### Added
+- Conservative function argument-family warnings with explicit AST-slot
+  mappings and overload matching. Comparison and function checks share one
+  type-annotation pass; skipped annotation is visible in query statistics.
 - Nested STRUCT/array member validation with typo suggestions and catalog-backed
   type propagation.
 - Recursive derived-table and CTE star resolution, closing the primary

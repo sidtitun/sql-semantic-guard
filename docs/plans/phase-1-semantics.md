@@ -167,6 +167,16 @@ types continue into sqlglot's type annotation and comparison checks.
 
 ## 1.4 Function signature checks (P2, 4 d)
 
+**Typed-validation follow-up.** Initial typed overloads cover numeric unary
+functions, lower/upper, round/power, replace/split_part, substring, date_trunc,
+and date parsing. Named AST slots handle normalized argument ordering.
+Warnings are emitted only if every modeled overload conflicts with a known
+non-literal argument. NULLs, parameters, literals requiring engine coercion,
+unknown types and unknown UDFs are not diagnosed as type errors. Both consumers
+share one annotation pass, independently controlled by their policy switches.
+Broader signatures and engine-backed evaluation remain future work; these
+checks do not prove execution validity or natural-language intent correctness.
+
 **Design.** Data, not code: `src/sqlguard/functions.py` holds
 `SIGNATURES: dict[str, list[Sig]]` where
 `Sig(min_args, max_args, arg_families: tuple[str|None,...], variadic_family)`,

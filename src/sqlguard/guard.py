@@ -168,6 +168,7 @@ class SQLGuard:
             "name_binding",
             "qualification",
             "type_checks",
+            "function_type_checks",
             "aggregation_checks",
             "domain_checks",
             "column_policy",
@@ -301,11 +302,19 @@ class SQLGuard:
                 )
 
         # 6. type checks --------------------------------------------------------
-        if qualified and policy.check_types:
+        annotated = None
+        if qualified and (policy.check_types or policy.check_function_signatures):
+            annotated = semantics.annotate_query_types(tree, index, dialect)
+        if annotated is not None and policy.check_types:
             run.append("type_checks")
-            violations.extend(semantics.check_types(tree, index, dialect))
-        elif not binding_failed and not policy.check_types:
+            violations.extend(semantics.check_comparison_types(annotated, dialect))
+        else:
             skipped.append("type_checks")
+        if annotated is not None and policy.check_function_signatures:
+            run.append("function_type_checks")
+            violations.extend(semantics.check_function_types(annotated, dialect, policy))
+        else:
+            skipped.append("function_type_checks")
 
         # Shared scope index: built once here, reused by every remaining stage.
         # Predicate/limit/projection mutations don't change source topology;

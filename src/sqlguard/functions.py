@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
+from types import MappingProxyType
 from typing import Final
 
 
@@ -103,9 +104,7 @@ ATHENA_SIGNATURES: Final[Mapping[str, FunctionSpec]] = {
     ),
     "date_add": FunctionSpec("date_add", (exact("unit", "value", "date"),)),
     "datediff": FunctionSpec("date_diff", (exact("unit", "start", "end"),)),
-    "format_datetime": FunctionSpec(
-        "format_datetime", (exact("timestamp", "format"),)
-    ),
+    "format_datetime": FunctionSpec("format_datetime", (exact("timestamp", "format"),)),
     "json_extract": FunctionSpec("json_extract", (exact("json", "path"),)),
     "json_extract_scalar": FunctionSpec("json_extract_scalar", (exact("json", "path"),)),
     "max": FunctionSpec("max", (optional("expression", "n", required=1),)),
@@ -134,4 +133,37 @@ def signature_registry(dialect: str) -> Mapping[str, FunctionSpec]:
     """Return shared signatures overlaid with dialect-specific definitions."""
     registry = dict(SHARED_SIGNATURES)
     registry.update(_DIALECT_SIGNATURES.get(dialect, {}))
-    return registry
+    return MappingProxyType(registry)
+
+
+@dataclass(frozen=True)
+class TypedOverload:
+    """Families in explicit SQLGlot argument-slot order, not SQL text order."""
+
+    slots: tuple[str, ...]
+    families: tuple[str | None, ...]
+
+
+NUMERIC_UNARY = TypedOverload(("this",), ("numeric",))
+TEXT_UNARY = TypedOverload(("this",), ("text",))
+TYPED_OVERLOADS: Final[Mapping[str, tuple[TypedOverload, ...]]] = MappingProxyType(
+    {
+        **dict.fromkeys(("abs", "exp", "ln", "sqrt", "ceil", "floor"), (NUMERIC_UNARY,)),
+        **dict.fromkeys(("lower", "upper"), (TEXT_UNARY,)),
+        "round": (TypedOverload(("this", "decimals"), ("numeric", "numeric")),),
+        "power": (TypedOverload(("this", "expression"), ("numeric", "numeric")),),
+        "split_part": (
+            TypedOverload(("this", "delimiter", "part_index"), ("text", "text", "numeric")),
+        ),
+        "replace": (
+            TypedOverload(("this", "expression", "replacement"), ("text", "text", "text")),
+        ),
+        "substring": (
+            TypedOverload(("this", "start", "length"), ("text", "numeric", "numeric")),
+            TypedOverload(("this", "start", "length"), ("text", "text", "text")),
+        ),
+        "timestamp_trunc": (TypedOverload(("this", "zone"), ("temporal", "text")),),
+        "str_to_time": (TypedOverload(("this", "format"), ("text", "text")),),
+        "str_to_date": (TypedOverload(("this", "format"), ("text", "text")),),
+    }
+)

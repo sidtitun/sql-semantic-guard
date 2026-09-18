@@ -9,7 +9,10 @@ analyst tool vs. a customer-facing chatbot).
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from sqlglot import exp, parse
+from sqlglot.errors import ParseError
 
 from sqlguard.errors import PolicyError
 
@@ -61,6 +64,8 @@ DEFAULT_FUNCTION_DENYLISTS: dict[str, frozenset[str]] = {
 _VALID_ON_MISSING = ("ignore", "warn", "error")
 _VALID_RLS_STRATEGIES = ("predicate", "subquery", "require")
 _VALID_CONFLICT_MODES = ("error", "warn", "ignore")
+_MASK_BUILTINS = frozenset({"null", "hash", "redact"})
+_MASK_COLUMN_SENTINEL = "__sqlguard_mask_column__"
 
 
 @dataclass
@@ -110,6 +115,11 @@ class ColumnRule:
 
     Matching: fnmatch patterns on table and column names, and/or catalog tag
     membership (``tags={"pii"}`` matches columns tagged ``pii``).
+
+    ``action="mask"`` replaces matching projected values. ``mask_with`` may
+    be one of ``"null"``, ``"hash"``, or ``"redact"``, or a SQL expression
+    containing ``{col}``, such as ``"left({col}, 4) || '****'"``. References
+    in predicates are blocked unless ``allow_predicates=True``.
     """
 
     column: str = "*"
@@ -117,12 +127,54 @@ class ColumnRule:
     tags: frozenset[str] | None = None
     action: str = "deny"
     reason: str | None = None
+    mask_with: str | None = None
+    allow_predicates: bool = False
+    _mask_template: exp.Expression | None = field(
+        init=False, repr=False, compare=False, default=None
+    )
 
     def __post_init__(self) -> None:
-        if self.action not in ("deny", "exclude_from_star"):
-            raise PolicyError("ColumnRule.action must be 'deny' or 'exclude_from_star'")
+        if self.action not in ("deny", "exclude_from_star", "mask"):
+            raise PolicyError(
+                "ColumnRule.action must be 'deny', 'exclude_from_star', or 'mask'"
+            )
         if self.tags is not None and not isinstance(self.tags, frozenset):
             self.tags = frozenset(self.tags)
+        if self.action != "mask":
+            if self.mask_with is not None:
+                raise PolicyError("mask_with is only valid for action='mask'")
+            if self.allow_predicates:
+                raise PolicyError("allow_predicates is only valid for action='mask'")
+            return
+        if not isinstance(self.mask_with, str) or not self.mask_with.strip():
+            raise PolicyError("ColumnRule action='mask' requires mask_with")
+        self.mask_with = self.mask_with.strip()
+        if self.mask_with.lower() in _MASK_BUILTINS:
+            self.mask_with = self.mask_with.lower()
+            return
+        if "{col}" not in self.mask_with:
+            raise PolicyError("custom mask_with expressions must contain {col}")
+        rendered = self.mask_with.replace("{col}", _MASK_COLUMN_SENTINEL)
+        try:
+            statements = parse(f"SELECT {rendered}")
+        except ParseError as exc:
+            raise PolicyError(f"invalid mask_with expression: {exc}") from exc
+        if len(statements) != 1 or not isinstance(statements[0], exp.Select):
+            raise PolicyError("mask_with must be one SQL expression")
+        expressions = statements[0].expressions
+        if len(expressions) != 1 or any(
+            isinstance(node, exp.Query) for node in expressions[0].walk()
+        ):
+            raise PolicyError("mask_with must be one scalar SQL expression")
+        columns = list(expressions[0].find_all(exp.Column))
+        if not columns or any(column.name != _MASK_COLUMN_SENTINEL for column in columns):
+            raise PolicyError("mask_with may only reference the {col} placeholder")
+        self._mask_template = expressions[0]
+
+    @property
+    def mask_template(self) -> exp.Expression | None:
+        """Return a defensive copy of a validated custom mask expression."""
+        return self._mask_template.copy() if self._mask_template is not None else None
 
 
 @dataclass

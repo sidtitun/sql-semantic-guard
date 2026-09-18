@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from sqlguard.scopeindex import ScopeIndex
 
 STAR_MARK = "sqlguard_star"
+EXPLICIT_PROJECTION_MARK = "sqlguard_explicit_projection"
 
 # Column types through which dotted access (``alias.field``) is plausible even
 # when ``alias`` is not a table: struct/map/json members, or unknown types.
@@ -729,13 +730,21 @@ def mark_star_selects(tree: exp.Expression) -> int:
     projection items from ones the author typed explicitly."""
     count = 0
     for sel in tree.find_all(exp.Select):
-        for e in sel.expressions:
-            if isinstance(e, exp.Star) or (
-                isinstance(e, exp.Column) and isinstance(e.this, exp.Star)
+        has_star = any(
+            isinstance(e, exp.Star)
+            or (isinstance(e, exp.Column) and isinstance(e.this, exp.Star))
+            for e in sel.expressions
+        )
+        if not has_star:
+            continue
+        sel.meta[STAR_MARK] = True
+        count += 1
+        for item in sel.expressions:
+            if not (
+                isinstance(item, exp.Star)
+                or (isinstance(item, exp.Column) and isinstance(item.this, exp.Star))
             ):
-                sel.meta[STAR_MARK] = True
-                count += 1
-                break
+                item.meta[EXPLICIT_PROJECTION_MARK] = True
     return count
 
 

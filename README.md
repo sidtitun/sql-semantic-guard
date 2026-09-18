@@ -17,8 +17,8 @@ plus your live schema catalog and, *before anything touches the database*:
 4. **Bounds scan cost** — statically estimates bytes/rows scanned from catalog
    statistics, enforces partition filters (Athena), and blocks queries over
    budget *before* you pay for them.
-5. **Rewrites in the safe direction** — expands `SELECT *`, drops restricted
-   columns, and adds/clamps `LIMIT`.
+5. **Rewrites in the safe direction** — expands `SELECT *`, drops or masks
+   restricted columns, and adds/clamps `LIMIT`.
 6. **Returns a structured, LLM-ready violation report** so the model can
    self-repair.
 
@@ -148,10 +148,38 @@ violations up front — prevention beats repair.
 | Domain checks | `WHERE status = 'shiped'` when the catalog allows `shipped` | `unknown_value` |
 | Nested/derived binding | `payload.refferer`; `SELECT sub.bogus FROM (SELECT * FROM orders) sub` | `unknown_column` |
 | Relationship checks | `orders.id = customers.id` when the declared FK is `orders.customer_id = customers.id` | `invalid_join_path` |
-| Column policy | `SELECT ssn …`; `SELECT * …` (drops `ssn`) | `column_denied` |
+| Column policy | `SELECT ssn …`; `SELECT * …` (drops or masks `ssn`) | `column_denied` |
 | Row-level security | missing tenant scope; `WHERE customer_id = <other tenant>` | `missing_tenant_filter`, `tenant_filter_conflict` |
 | Cost & partitions | 20 GiB scan over a 1 GiB budget; Athena query with no partition filter | `scan_budget_exceeded`, `missing_partition_filter` |
 | Complexity budgets | generated query with 40 joins, excessive nesting, CTEs, UNION branches, or AST nodes | `complexity_exceeded` |
+
+## Column masking
+
+Mask sensitive output while retaining its shape with a built-in or a validated
+SQL expression:
+
+```python
+Policy(column_rules=[
+    ColumnRule(tags={"pii"}, action="mask", mask_with="hash"),
+    ColumnRule(
+        table="customers",
+        column="phone",
+        action="mask",
+        mask_with="LEFT({col}, 4) || '****'",
+    ),
+])
+```
+
+The built-ins are `"redact"` (`'***'`), `"null"` (a typed `NULL`), and
+`"hash"` (rendered for PostgreSQL or Athena/Trino). They apply to explicit
+projections and expanded stars while preserving output aliases. Custom
+expressions must contain `{col}` and are parsed when the policy is created.
+
+Masked columns are blocked in `WHERE`, `JOIN`, `GROUP BY`, and `ORDER BY` by
+default because rewriting those references would change query semantics. Set
+`allow_predicates=True` on the mask rule when callers may filter on the raw
+value while the returned value remains masked. When rules overlap, precedence
+is deterministic: `deny` beats `mask`, which beats `exclude_from_star`.
 
 ## Row-level security done correctly
 

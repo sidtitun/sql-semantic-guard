@@ -53,7 +53,7 @@ test plans, risks) under [plans/](plans/README.md).
 | # | Item | Prio | Effort | Acceptance criterion |
 |---|---|:---:|:---:|---|
 | 2.1 | **Column masking** — `ColumnRule(action="mask", mask_with="'***'"/hash/partial)`, type-preserving, applied in star expansion *and* explicit selects | P0 | 4 d | `SELECT email FROM customers` returns `mask(email)` per policy instead of erroring, when policy says mask |
-| 2.2 | **Expression RLS rules** — predicate templates beyond equality: `RLSRule(predicate="region IN :regions AND deleted_at IS NULL")`, parsed+validated at construction | P1 | 4 d | Multi-condition tenancy expressed in one rule; injection still per-scope and join-aware |
+| 2.2 | **Expression RLS rules (implemented)** — predicate templates beyond equality: `RLSRule(predicate="region IN :regions AND deleted_at IS NULL")`, parsed+validated at construction | P1 | 4 d | Multi-condition tenancy expressed in one rule; injection still per-scope and join-aware |
 | 2.3 | **Role-based policy sets** — named roles mapping to (column rules, RLS, budgets); `guard.validate(sql, role="analyst", params=…)`; policy composition/inheritance | P1 | 4 d | Same guard object serves `analyst` and `support` with different visibility, tested |
 | 2.4 | **Complexity budgets** — max joins, max subquery/CTE depth, max UNION branches, expression-node ceiling (planner-abuse and prompt-injection blast-radius control) | P1 | 2 d | A 40-join generated monster is rejected with `complexity_exceeded` |
 | 2.5 | **Audit & observability hooks** — structured audit record per validation (who/what/verdict/violations), pluggable sink, OpenTelemetry spans + counters by violation code | P1 | 3 d | Compliance can reconstruct every allow/deny decision from the audit stream |

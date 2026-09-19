@@ -8,8 +8,10 @@ analyst tool vs. a customer-facing chatbot).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError
@@ -66,35 +68,98 @@ _VALID_RLS_STRATEGIES = ("predicate", "subquery", "require")
 _VALID_CONFLICT_MODES = ("error", "warn", "ignore")
 _MASK_BUILTINS = frozenset({"null", "hash", "redact"})
 _MASK_COLUMN_SENTINEL = "__sqlguard_mask_column__"
+_PARAM_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+@lru_cache(maxsize=256)
+def _parse_rls_predicate(predicate: str, dialect: str | None) -> exp.Expression:
+    try:
+        statements = parse(predicate, read=dialect)
+    except ParseError as exc:
+        raise PolicyError(f"invalid RLS predicate: {exc}") from exc
+    if len(statements) != 1:
+        raise PolicyError("RLS predicate must be exactly one SQL expression")
+    expression = statements[0]
+    if not isinstance(expression, exp.Expression):
+        raise PolicyError("RLS predicate must be exactly one SQL expression")
+    if isinstance(expression, exp.Query) or any(
+        isinstance(
+            node,
+            (exp.Query, exp.Table, exp.Command, exp.Alias, exp.AggFunc, exp.Window),
+        )
+        for node in expression.walk()
+    ):
+        raise PolicyError(
+            "RLS predicate must be a row-level scalar condition without "
+            "subqueries, aggregates, or windows"
+        )
+    columns = list(expression.find_all(exp.Column))
+    if any(column.table or isinstance(column.this, exp.Star) for column in columns):
+        raise PolicyError("RLS predicate columns must be unqualified and may not use *")
+    placeholders = list(expression.find_all(exp.Placeholder))
+    if any(not _PARAM_NAME.fullmatch(str(placeholder.name)) for placeholder in placeholders):
+        raise PolicyError("RLS predicate placeholders must use named :parameter syntax")
+    return expression
 
 
 @dataclass
 class RLSRule:
-    """Row-level security rule: constrain ``table`` by ``column = <param>``.
+    """Row-level security rule for an equality or predicate template.
 
     ``table`` may be an fnmatch pattern (``"*"`` = every table that has the
-    column). ``param`` names the key looked up in ``validate(..., params=...)``
-    and defaults to the column name. ``on_missing_column`` controls what
-    happens when a matched table lacks the column: ``"error"`` fails closed
-    (recommended for exact table names), ``"skip"`` ignores that table
-    (useful with wildcard patterns).
+    required columns). Equality rules use ``column`` and optional ``param``.
+    Expression rules instead use an unqualified scalar ``predicate`` with
+    named placeholders, for example ``"region IN :regions AND deleted_at IS
+    NULL"``. Exactly one of ``column`` and ``predicate`` is required.
     """
 
     table: str
-    column: str
+    column: str | None = None
     param: str | None = None
     schema: str | None = None
     on_missing_column: str = "error"
+    predicate: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.table or not self.column:
-            raise PolicyError("RLSRule requires both table and column")
+        if not self.table:
+            raise PolicyError("RLSRule requires table")
+        if bool(self.column) == bool(self.predicate):
+            raise PolicyError("RLSRule requires exactly one of column or predicate")
+        if self.predicate is not None:
+            if self.param is not None:
+                raise PolicyError("param is only valid for column-based RLS rules")
+            self.predicate = self.predicate.strip()
+            if not self.predicate:
+                raise PolicyError("RLSRule predicate must be non-empty")
+            _parse_rls_predicate(self.predicate, None)
         if self.on_missing_column not in ("error", "skip"):
             raise PolicyError("RLSRule.on_missing_column must be 'error' or 'skip'")
 
     @property
     def param_name(self) -> str:
+        if self.column is None:
+            raise PolicyError("expression RLS rules have multiple named parameters")
         return self.param or self.column
+
+    @property
+    def is_expression(self) -> bool:
+        return self.predicate is not None
+
+    def predicate_template(self, dialect: str) -> exp.Expression:
+        if self.predicate is None:
+            raise PolicyError("column-based RLS rules do not have a predicate template")
+        return _parse_rls_predicate(self.predicate, dialect).copy()
+
+    def predicate_columns(self, dialect: str) -> frozenset[str]:
+        return frozenset(
+            column.name for column in self.predicate_template(dialect).find_all(exp.Column)
+        )
+
+    def predicate_params(self, dialect: str) -> frozenset[str]:
+        return frozenset(
+            placeholder.name
+            for placeholder in self.predicate_template(dialect).find_all(exp.Placeholder)
+        )
 
     @property
     def is_pattern(self) -> bool:

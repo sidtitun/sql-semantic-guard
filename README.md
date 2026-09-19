@@ -207,6 +207,28 @@ Strategies: `predicate` (default, inject inline), `subquery` (always wrap), or
 Set `rls_parameterize=True` to emit driver placeholders (`%(customer_id)s`)
 instead of literals so your existing parameter-binding path stays intact.
 
+For compound tenancy, soft-delete, region, or effective-date rules, use a
+validated predicate template instead of a single equality:
+
+```python
+Policy(rls=[
+    RLSRule(
+        table="orders",
+        predicate="region IN :regions AND deleted_at IS NULL",
+    )
+])
+
+guard.validate(sql, params={"regions": ["APAC", "EMEA"]})
+```
+
+Predicate columns are unqualified in the template and are bound to each table
+alias when injected. Named parameters are converted to SQL literals; list and
+tuple values expand inside `IN`. Templates, dialect syntax, and referenced
+catalog columns are validated when the rule/guard is constructed. Missing or
+empty parameters fail closed. Expression rules support the `predicate` and
+`subquery` strategies; `require` and conflict diagnostics remain available for
+the simpler equality rules.
+
 ## Live schema reflection
 
 Skip hand-writing the catalog:

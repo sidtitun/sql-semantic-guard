@@ -8,13 +8,15 @@ to run on machine-generated SQL.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from sqlglot import exp
+from sqlglot import exp, parse_one
+from sqlglot.optimizer.scope import ScopeType
 
 from sqlguard.catalog import CatalogIndex, Table, match_table
 from sqlguard.policy import ColumnRule, Policy
 from sqlguard.semantics import (
+    EXPLICIT_PROJECTION_MARK,
     STAR_MARK,
     ScopeInfo,
     resolve_column_origin,
@@ -72,6 +74,58 @@ def _matching_rules(
     return [r for r in rules if _rule_matches(r, index, table, column_name, tags)]
 
 
+def _effective_rule(rules: Sequence[ColumnRule]) -> ColumnRule | None:
+    priority = {"exclude_from_star": 1, "mask": 2, "deny": 3}
+    return max(rules, key=lambda rule: priority[rule.action], default=None)
+
+
+def _is_explicit_projection(item: exp.Expression) -> bool:
+    if item.meta.get(EXPLICIT_PROJECTION_MARK):
+        return True
+    return isinstance(item, exp.Alias) and bool(
+        item.this.meta.get(EXPLICIT_PROJECTION_MARK)
+    )
+
+
+def _mask_expression(
+    rule: ColumnRule,
+    column: exp.Column,
+    origin: tuple[Table, str] | None,
+    index: CatalogIndex,
+    dialect: str,
+) -> exp.Expression:
+    assert rule.mask_with is not None
+    if rule.mask_with == "null":
+        if origin is not None:
+            catalog_column = origin[0].column(origin[1])
+            dtype = index.data_type(catalog_column) if catalog_column is not None else None
+            if dtype is not None:
+                return exp.Cast(this=exp.Null(), to=dtype.copy())
+        return exp.Null()
+    if rule.mask_with == "redact":
+        return exp.Literal.string("***")
+
+    sentinel = "__sqlguard_mask_column__"
+    template: exp.Expression
+    if rule.mask_with == "hash":
+        if dialect == "athena":
+            sql = f"TO_HEX(MD5(TO_UTF8(CAST({sentinel} AS VARCHAR))))"
+        else:
+            sql = f"MD5(CAST({sentinel} AS TEXT))"
+        template = cast(exp.Expression, parse_one(sql, read=dialect))
+    else:
+        custom_template = rule.mask_template
+        assert custom_template is not None
+        template = custom_template
+
+    return template.transform(
+        lambda node: column.copy()
+        if isinstance(node, exp.Column) and node.name == sentinel
+        else node,
+        copy=False,
+    )
+
+
 def apply_column_rules(
     tree: exp.Expression,
     index: CatalogIndex,
@@ -79,15 +133,7 @@ def apply_column_rules(
     dialect: str,
     scope_index: ScopeIndex | None = None,
 ) -> tuple[list[Violation], list[Rewrite]]:
-    """Enforce ColumnRules.
-
-    Order matters: violations for *explicit* references are collected first
-    (before any star-expanded projection items are dropped), then matching
-    items are removed from star-expanded SELECT lists.
-
-    Dropping projection items does not change source topology, so a shared
-    ``scope_index`` stays valid across this pass.
-    """
+    """Enforce deny, mask, and star-exclusion column rules."""
     rules = list(policy.column_rules)
     if not rules:
         return [], []
@@ -99,44 +145,61 @@ def apply_column_rules(
     else:
         infos, by_expr = scope_infos_with_lookup(tree, index)
 
-    # Projection items that came from a ``*`` expansion are exempt from
-    # "explicit reference" violations — they get dropped instead.
-    star_item_ids: set[int] = set()
     starred_selects: list[tuple[exp.Select, ScopeInfo]] = []
     for info in infos:
         expr = info.expression
         if isinstance(expr, exp.Select) and expr.meta.get(STAR_MARK):
             starred_selects.append((expr, info))
-            for item in expr.expressions:
-                star_item_ids.add(id(item))
 
-    def item_root(col: exp.Column) -> exp.Expression | None:
+    def item_root(col: exp.Column) -> tuple[exp.Select | None, exp.Expression | None]:
         node: exp.Expression | None = col
         while node is not None and not isinstance(node.parent, exp.Select):
             node = node.parent  # type: ignore[assignment]
-        return node
+        parent = node.parent if node is not None else None
+        return (parent if isinstance(parent, exp.Select) else None), node
 
     seen: set[tuple[str, str]] = set()
+    replacements: list[
+        tuple[exp.Column, ColumnRule, tuple[Table, str] | None, exp.Expression]
+    ] = []
+    drops: dict[int, set[int]] = {}
+    masked_items: set[tuple[int, str, str]] = set()
+
     for info in infos:
         for col in info.scope.columns:
             if isinstance(col.this, exp.Star) or not col.name:
                 continue
-            root_item = item_root(col)
-            if root_item is not None and id(root_item) in star_item_ids and (
-                root_item is col
-                or (isinstance(root_item, exp.Alias) and root_item.this is col)
-            ):
-                continue  # star-derived; handled by the drop pass
+            select, root_item = item_root(col)
+            is_projection = bool(
+                select is not None
+                and root_item is not None
+                and any(item is root_item for item in select.expressions)
+            )
+            star_derived = bool(
+                is_projection
+                and select is not None
+                and select.meta.get(STAR_MARK)
+                and root_item is not None
+                and not _is_explicit_projection(root_item)
+            )
             origin = resolve_column_origin(by_expr, info, col, index)
             matched = _matching_rules(rules, index, origin, col.name)
-            denies = [r for r in matched if r.action == "deny"]
-            if denies:
+            rule = _effective_rule(matched)
+            if rule is None:
+                continue
+
+            if star_derived and rule.action in ("deny", "exclude_from_star"):
+                assert select is not None and root_item is not None
+                drops.setdefault(id(select), set()).add(id(root_item))
+                continue
+
+            if rule.action == "deny":
                 table_name = origin[0].display_name if origin else None
                 key = (table_name or "", index.normalize(col.name))
                 if key in seen:
                     continue
                 seen.add(key)
-                reason = denies[0].reason or "restricted by policy"
+                reason = rule.reason or "restricted by policy"
                 violations.append(
                     Violation(
                         Code.COLUMN_DENIED,
@@ -149,17 +212,55 @@ def apply_column_rules(
                     )
                 )
 
-    # Drop matching items from star-expanded select lists.
-    for select, info in starred_selects:
+            if rule.action != "mask":
+                continue
+            if is_projection and root_item is not None:
+                direct_passthrough = root_item is col or (
+                    isinstance(root_item, exp.Alias) and root_item.this is col
+                )
+                intermediate_scope = info.scope.scope_type in (
+                    ScopeType.CTE,
+                    ScopeType.DERIVED_TABLE,
+                )
+                # Preserve a raw pass-through inside an intermediate relation
+                # so its final consumer can filter correctly and mask once at
+                # the result boundary. Expressions and scalar subqueries are
+                # masked in place because lineage cannot safely defer them.
+                if intermediate_scope and direct_passthrough:
+                    continue
+                replacements.append((col, rule, origin, root_item))
+                continue
+            mask_rules = [matched_rule for matched_rule in matched if matched_rule.action == "mask"]
+            if all(mask_rule.allow_predicates for mask_rule in mask_rules):
+                continue
+            table_name = origin[0].display_name if origin else None
+            key = (table_name or "", index.normalize(col.name))
+            if key in seen:
+                continue
+            seen.add(key)
+            reason = rule.reason or "masked columns may not be used in predicates"
+            violations.append(
+                Violation(
+                    Code.COLUMN_DENIED,
+                    Severity.ERROR,
+                    f"Column {col.name!r}"
+                    + (f" of table {table_name!r}" if table_name else "")
+                    + f" may not be referenced outside the select list: {reason}",
+                    table=table_name,
+                    column=col.name,
+                )
+            )
+
+    # Remove denied/excluded generated star items before replacing projected
+    # columns, while the original projection identity is still available.
+    for select, _info in starred_selects:
         kept: list[exp.Expression] = []
         dropped: list[str] = []
         for item in select.expressions:
-            inner = item.this if isinstance(item, exp.Alias) else item
-            if isinstance(inner, exp.Column) and inner.name:
-                origin = resolve_column_origin(by_expr, info, inner, index)
-                if _matching_rules(rules, index, origin, inner.name):
-                    dropped.append(inner.name)
-                    continue
+            if id(item) in drops.get(id(select), set()):
+                inner = item.this if isinstance(item, exp.Alias) else item
+                dropped.append(inner.name if isinstance(inner, exp.Column) else item.alias_or_name)
+                continue
             kept.append(item)
         if not dropped:
             continue
@@ -180,6 +281,28 @@ def apply_column_rules(
                 RewriteKind.SENSITIVE_COLUMN_EXCLUDED,
                 f"Removed restricted column(s) from * expansion: {', '.join(sorted(set(dropped)))}",
                 extra={"columns": sorted(set(dropped))},
+            )
+        )
+
+    for column, rule, origin, root_item in replacements:
+        if column.parent is None:
+            continue  # its projection was removed by a stronger rule
+        masked = _mask_expression(rule, column, origin, index, dialect)
+        column.replace(masked)
+        table_name = origin[0].display_name if origin else ""
+        column_name = origin[1] if origin else column.name
+        rewrite_key = (id(root_item), table_name, index.normalize(column_name))
+        if rewrite_key in masked_items:
+            continue
+        masked_items.add(rewrite_key)
+        rewrites.append(
+            Rewrite(
+                RewriteKind.COLUMN_MASKED,
+                f"Masked column {column_name!r}"
+                + (f" of table {table_name!r}" if table_name else ""),
+                table=table_name or None,
+                column=column_name,
+                extra={"mask": rule.mask_with},
             )
         )
     return violations, rewrites

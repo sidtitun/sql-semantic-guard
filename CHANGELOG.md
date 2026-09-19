@@ -7,6 +7,10 @@ versioning: [SemVer](https://semver.org). Violation `Code` values and
 ## [Unreleased]
 
 ### Added
+- Column masking for explicit and star-expanded projections, with validated
+  custom expressions, typed-null/redact/hash built-ins, CTE lineage support,
+  predicate controls, deterministic rule precedence, and structured rewrite
+  records.
 - Conservative function argument-family warnings with explicit AST-slot
   mappings and overload matching. Comparison and function checks share one
   type-annotation pass; skipped annotation is visible in query statistics.

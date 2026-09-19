@@ -76,6 +76,7 @@ class RewriteKind(str, Enum):
 
     STAR_EXPANDED = "star_expanded"
     SENSITIVE_COLUMN_EXCLUDED = "sensitive_column_excluded"
+    COLUMN_MASKED = "column_masked"
     LIMIT_ADDED = "limit_added"
     LIMIT_CLAMPED = "limit_clamped"
     RLS_FILTER_ADDED = "rls_filter_added"

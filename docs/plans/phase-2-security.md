@@ -19,7 +19,7 @@
 
 ---
 
-## 2.1 Column masking (P0, 4 d)
+## 2.1 Column masking (P0, implemented)
 
 **Ask.** Compliance rarely wants a hard block on PII — they want analysts to
 *see the shape, not the value*. v1 only has `deny`/`exclude_from_star`.

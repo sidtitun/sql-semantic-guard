@@ -1,4 +1,4 @@
-# sql-semantic-guard
+# SQL Semantic Guard
 
 **A semantic firewall for LLM-generated SQL.** Companies want text-to-SQL but are
 terrified of it — and rightly so. `sql-semantic-guard` takes a generated query
@@ -25,16 +25,31 @@ plus your live schema catalog and, *before anything touches the database*:
 Everything is composable, dependency-light (just [`sqlglot`](https://github.com/tobymao/sqlglot)),
 and fails **closed**: an invalid result never carries executable SQL.
 
-```text
-generated SQL ──▶  ┌─────────────────────────────────────────────┐  ──▶ safe SQL
-                   │ parse → statement/function gates →            │      (rewritten,
-   live catalog ──▶│ name binding → qualification → type checks → │       tenant-scoped,
-                   │ column policy → RLS injection → limits →      │       LIMITed)
-     policy ──────▶│ join sanity → partition filters → cost        │  ──▶ or violations[]
-                   └─────────────────────────────────────────────┘      (for self-repair)
+## What this repository is
+
+SQL Semantic Guard is a Python library that sits **between a SQL-generating
+LLM and your database**. It parses the proposed SQL, resolves it against a
+trusted catalog, applies security and resource policies, and returns either:
+
+- rewritten SQL that is safe to send to a read-only database connection; or
+- structured violations that your application can reject or send back to the
+  LLM for correction.
+
+It is not a text-to-SQL model, database driver, query executor, or database
+proxy. Bring your own LLM and execution layer; use this repository as the
+deterministic enforcement boundary between them.
+
+```mermaid
+flowchart TD
+    Q["User question"] --> L["Text-to-SQL model"]
+    L --> G["SQL Semantic Guard"]
+    C["Catalog + policy + trusted caller context"] --> G
+    G -->|"invalid: structured feedback"| L
+    G -->|"valid: rewritten SQL only"| D["Read-only database role"]
+    D --> R["Application result"]
 ```
 
-## Why this exists
+## The problem it solves
 
 The dangerous failures of text-to-SQL are **semantic, not syntactic**:
 hallucinated columns, wrong joins, a missing tenant filter, misuse of a
@@ -43,6 +58,19 @@ checks, and catalog awareness — which a plain AST parser doesn't do. Today's
 options stop at "does it parse / does it execute," so every serious NL2SQL
 deployment re-builds the same guardrails by hand. This is that layer, as a
 library.
+
+| Failure in generated SQL | Production risk | Guard response |
+|---|---|---|
+| Valid syntax, nonexistent table or column | Runtime failure or incorrect answer | Catalog-aware binding rejects it with suggestions |
+| `UPDATE`, DDL, writable CTE, locking, or dangerous function | Data loss, state changes, denial of service | Statement and function gates block it |
+| Missing or spoofed tenant filter | Cross-tenant data exposure | RLS is verified or injected at every table reference |
+| `SELECT *` includes PII | Sensitive-data leakage | Stars expand and restricted columns are denied, removed, or masked |
+| Wrong join path or ambiguous reference | Plausible but incorrect answer | Relationship and scope checks report the error |
+| Unbounded or partition-free query | High latency and warehouse cost | Limits, complexity budgets, partition rules, and scan budgets stop it |
+| Invalid query returned as a plain exception | Weak LLM repair loop | Stable codes and `feedback()` provide actionable correction context |
+
+The guard never executes SQL. Your application must execute only `result.sql`
+when `result.valid` is `True`; never fall back to the original model output.
 
 ## Install
 
@@ -54,10 +82,16 @@ pip install 'sql-semantic-guard[athena]'       # + boto3 / AWS Glue reflection
 
 Requires Python 3.9+.
 
-## Quickstart
+## Implement it
+
+### 1. Build a trusted catalog
+
+The catalog is the ground truth for table, column, type, relationship, domain,
+cost, and policy checks. Define it in code or reflect it from the live schema.
+Do not construct it from user prompts or model output.
 
 ```python
-from sqlguard import SQLGuard, Catalog, Policy, RLSRule, ColumnRule
+from sqlguard import Catalog
 
 catalog = Catalog.from_dict({
     "orders": {
@@ -72,37 +106,137 @@ catalog = Catalog.from_dict({
         "total_bytes": 8 << 30,
     },
 })
+```
 
-guard = SQLGuard(
-    catalog,
-    Policy(
-        rls=[RLSRule(table="orders", column="customer_id", param="customer_id")],
-        column_rules=[ColumnRule(tags={"pii"}, action="deny", reason="PII")],
-        default_limit=1000,
-        max_bytes_scanned=16 << 30,
-    ),
-    dialect="postgres",
+For production systems, prefer live reflection so schema changes do not make
+the guard stale. See [Live schema reflection](#live-schema-reflection).
+
+### 2. Define the enforcement policy
+
+Policies are application-owned configuration. RLS parameter values must come
+from authenticated server-side context—not from the prompt or the LLM.
+
+```python
+from sqlguard import ColumnRule, Policy, RLSRule
+
+policy = Policy(
+    rls=[RLSRule(table="orders", column="customer_id", param="customer_id")],
+    column_rules=[ColumnRule(tags={"pii"}, action="deny", reason="PII")],
+    default_limit=1000,
+    max_limit=10_000,
+    max_bytes_scanned=16 << 30,
+    max_joins=8,
+    max_subquery_depth=4,
+    max_ctes=8,
+    max_union_branches=6,
+    max_expression_nodes=5000,
+)
+```
+
+### 3. Construct one reusable guard
+
+`SQLGuard` is stateless per validation call and can be shared across requests.
+
+```python
+from sqlguard import SQLGuard
+
+guard = SQLGuard(catalog, policy, dialect="postgres")
+```
+
+### 4. Validate before every execution
+
+Treat model-generated SQL as untrusted input. Execute only the rewritten SQL
+returned when `result.valid` is `True`.
+
+```python
+result = guard.validate(
+    sql_from_llm,
+    params={"customer_id": authenticated_tenant_id},
 )
 
-# The LLM generated this:
-result = guard.validate("SELECT * FROM orders", params={"customer_id": 42})
+if not result.valid:
+    return {
+        "message": result.feedback(),
+        "validation": result.to_dict(),
+    }
 
-if result.valid:
-    run(result.sql)
-    # SELECT orders.id, orders.customer_id, orders.amount, orders.created_at
-    # FROM orders WHERE orders.customer_id = 42 LIMIT 1000
-    #  → SELECT * expanded, ssn (PII) dropped, tenant filter injected, LIMIT added
+rows = execute_with_read_only_role(result.sql)
+```
+
+For example, validating `SELECT * FROM orders` can produce:
+
+```sql
+SELECT orders.id, orders.customer_id, orders.amount, orders.created_at
+FROM orders
+WHERE orders.customer_id = 42
+LIMIT 1000
+```
+
+The rewrite expands `*`, removes `ssn`, injects the tenant filter, and adds a
+row limit.
+
+### 5. Add bounded LLM self-repair
+
+Use the structured feedback for one or two correction attempts, then fail
+closed. Never execute the original SQL after a guard failure.
+
+```python
+messages = [{"role": "system", "content": guard.policy_prompt()}, ...]
+
+for _ in range(2):
+    sql_from_llm = llm(messages)
+    result = guard.validate(
+        sql_from_llm,
+        params={"customer_id": authenticated_tenant_id},
+    )
+    if result.valid:
+        break
+    messages.extend([
+        {"role": "assistant", "content": sql_from_llm},
+        {"role": "user", "content": result.feedback()},
+    ])
+
+if not result.valid:
+    refuse_or_escalate(result)
 else:
-    print(result.feedback())   # hand back to the LLM to fix
+    rows = execute_with_read_only_role(result.sql)
+```
+
+`guard.policy_prompt()` supplies the known schema and active rules to the
+model, reducing avoidable failures before the repair loop starts.
+
+### Minimal API-service pattern
+
+Keep validation in the trusted backend, immediately before execution:
+
+```python
+def answer_database_question(question: str, authenticated_tenant_id: int):
+    generated_sql = text_to_sql_model(question, guard.policy_prompt())
+    result = guard.validate(
+        generated_sql,
+        params={"customer_id": authenticated_tenant_id},
+    )
+    if not result.valid:
+        return {"ok": False, "validation": result.to_dict()}
+
+    rows = execute_with_read_only_role(result.sql)
+    return {
+        "ok": True,
+        "rows": rows,
+        "rewrites": [rewrite.to_dict() for rewrite in result.rewrites],
+    }
 ```
 
 A blocked query returns actionable, deterministic feedback:
 
 ```python
-r = guard.validate("SELECT amont FROM orderz WHERE customer_id = 999",
-                   params={"customer_id": 42})
+r = guard.validate(
+    "SELECT amont FROM orderz WHERE customer_id = 999",
+    params={"customer_id": 42},
+)
 print(r.feedback())
 ```
+
 ```text
 The SQL failed validation with 3 error(s).
 Errors (must fix):
@@ -113,27 +247,6 @@ Errors (must fix):
 Regenerate the complete SQL statement fixing every error above. Only a single read-only
 SELECT statement is allowed.
 ```
-
-## The self-repair loop
-
-The whole point of a *structured* report is that the model can consume it:
-
-```python
-messages = [{"role": "system", "content": guard.policy_prompt()}, ...]
-
-for attempt in range(4):
-    sql = llm(messages)
-    result = guard.validate(sql, params={"customer_id": user_id})
-    if result.valid:
-        break
-    messages.append({"role": "assistant", "content": sql})
-    messages.append({"role": "user", "content": result.feedback()})
-
-rows = run(result.sql) if result.valid else refuse()
-```
-
-`guard.policy_prompt()` also emits a schema + rules block to *prevent* many
-violations up front — prevention beats repair.
 
 ## What each layer catches
 
@@ -152,6 +265,24 @@ violations up front — prevention beats repair.
 | Row-level security | missing tenant scope; `WHERE customer_id = <other tenant>` | `missing_tenant_filter`, `tenant_filter_conflict` |
 | Cost & partitions | 20 GiB scan over a 1 GiB budget; Athena query with no partition filter | `scan_budget_exceeded`, `missing_partition_filter` |
 | Complexity budgets | generated query with 40 joins, excessive nesting, CTEs, UNION branches, or AST nodes | `complexity_exceeded` |
+
+## Validation result contract
+
+`guard.validate()` always returns a `ValidationResult`; SQL problems do not
+raise exceptions. The important fields are:
+
+| Field | Meaning |
+|---|---|
+| `valid` | `True` only when the returned query may be executed |
+| `sql` | Rewritten SQL when valid; `None` when blocked |
+| `violations` / `errors` | Structured codes, messages, hints, table/column context, and metadata |
+| `rewrites` | Applied protections such as RLS, masking, star expansion, and limits |
+| `stats` | Referenced tables/columns, complexity counters, checks run, and cost estimate |
+| `would_block` | In shadow mode, whether enforcing mode would have rejected the query |
+
+Use `result.to_dict()` for API responses or audit events and
+`result.feedback()` for an LLM correction prompt. Use `validate_or_raise()`
+only when exception-based application flow is preferred.
 
 ## Column masking
 
@@ -250,6 +381,27 @@ For Postgres you can additionally gate on the planner's own estimate with
 `EXPLAIN` (no rows read) — see `sqlguard.postgres.PostgresExplainEstimator` and
 `examples/postgres_example.py`.
 
+## Production checklist
+
+- Run queries with a **read-only, least-privilege database role**. The guard is
+  defense in depth, not a replacement for database permissions.
+- Build RLS parameters from authenticated server context. Never let the model
+  choose tenant IDs, regions, roles, or other authorization values.
+- Reflect or refresh the catalog as part of deployment so validation matches
+  the database schema.
+- Validate every generated and regenerated query. Execute only `result.sql`.
+- Configure default/max row limits, complexity ceilings, partition rules, and
+  scan budgets appropriate for the application.
+- Keep LLM repair attempts bounded; one or two retries is usually enough.
+- Add database statement timeouts and warehouse-native quotas as a second
+  resource-control layer.
+- Log `result.to_dict()` for observability, but apply your normal controls to
+  SQL text and literals because they may contain sensitive data.
+- Use `Policy(enforcement="log_only")` to measure would-block behavior before
+  enforcing a new policy, then switch to the default `"block"` mode.
+- Test representative joins, CTEs, tenant rules, masks, and failure cases
+  against a non-production database before rollout.
+
 ## Design guarantees
 
 - **Fail closed.** If `result.valid` is `False`, `result.sql` is `None`. Even an
@@ -274,7 +426,7 @@ least-privilege database credentials — keep those too.
 
 ```bash
 pip install -e '.[dev,all]'
-pytest          # 220+ tests, with a 90% coverage gate in CI
+pytest          # 360+ tests, with a 90% coverage gate in CI
 ruff check .
 mypy            # strict typing is blocking in CI
 ```

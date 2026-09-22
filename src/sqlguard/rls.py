@@ -48,6 +48,8 @@ _CONFLICT_SEVERITY = {
 def _conjuncts(condition: exp.Expression | None) -> list[exp.Expression]:
     if condition is None:
         return []
+    while isinstance(condition, exp.Paren):
+        condition = condition.this
     if isinstance(condition, exp.And):
         return [cast(exp.Expression, item) for item in condition.flatten()]
     return [condition]
@@ -94,7 +96,12 @@ class _InValues(list[exp.Expression]):
 def _convert_value(value: Any) -> exp.Expression | _InValues | None:
     try:
         if isinstance(value, (list, tuple, set, frozenset)):
-            items = _InValues(cast(exp.Expression, exp.convert(v)) for v in value)
+            values = (
+                sorted(value, key=lambda item: (type(item).__qualname__, repr(item)))
+                if isinstance(value, (set, frozenset))
+                else value
+            )
+            items = _InValues(cast(exp.Expression, exp.convert(v)) for v in values)
             if not items:
                 return None
             return items
@@ -110,6 +117,91 @@ def _build_predicate(
     if isinstance(value_expr, _InValues):
         return exp.In(this=col_ref, expressions=[v.copy() for v in value_expr])
     return col_ref.eq(value_expr.copy() if isinstance(value_expr, exp.Expression) else value_expr)
+
+
+def _expression_predicate(
+    rule: RLSRule,
+    alias: str,
+    params: Mapping[str, Any],
+    dialect: str,
+    parameterize: bool,
+) -> tuple[exp.Expression, set[str], set[str]]:
+    """Bind an expression rule, returning predicate, missing params, bad params."""
+    predicate = rule.predicate_template(dialect)
+    for column in predicate.find_all(exp.Column):
+        column.set("table", exp.to_identifier(alias))
+
+    missing: set[str] = set()
+    invalid: set[str] = set()
+
+    # List values are only meaningful inside IN. Support both ``IN :values``
+    # (sqlglot's ``field`` form) and ``IN (:values)``.
+    for in_node in list(predicate.find_all(exp.In)):
+        field = in_node.args.get("field")
+        if isinstance(field, exp.Placeholder):
+            name = field.name
+            if name not in params or params[name] is None:
+                if not parameterize:
+                    missing.add(name)
+            else:
+                converted = _convert_value(params[name])
+                if converted is None:
+                    invalid.add(name)
+                elif isinstance(converted, _InValues):
+                    in_node.set("field", None)
+                    in_node.set("expressions", [item.copy() for item in converted])
+                else:
+                    in_node.set("field", None)
+                    in_node.set("expressions", [converted.copy()])
+
+        expressions = list(in_node.expressions)
+        if not expressions:
+            continue
+        expanded: list[exp.Expression] = []
+        changed = False
+        for item in expressions:
+            if not isinstance(item, exp.Placeholder):
+                expanded.append(item)
+                continue
+            name = item.name
+            if name not in params or params[name] is None:
+                if not parameterize:
+                    missing.add(name)
+                expanded.append(item)
+                continue
+            converted = _convert_value(params[name])
+            if converted is None:
+                invalid.add(name)
+                expanded.append(item)
+            elif isinstance(converted, _InValues):
+                expanded.extend(value.copy() for value in converted)
+                changed = True
+            else:
+                expanded.append(converted.copy())
+                changed = True
+        if changed:
+            in_node.set("expressions", expanded)
+
+    for placeholder in list(predicate.find_all(exp.Placeholder)):
+        name = placeholder.name
+        if name not in params or params[name] is None:
+            if not parameterize:
+                missing.add(name)
+            continue
+        converted = _convert_value(params[name])
+        if converted is None or isinstance(converted, _InValues):
+            invalid.add(name)
+            continue
+        placeholder.replace(converted.copy())
+
+    return predicate, missing, invalid
+
+
+def _predicate_present(
+    pool: Sequence[exp.Expression], expected: exp.Expression
+) -> bool:
+    """Whether every top-level conjunct of ``expected`` already exists."""
+    return all(any(actual == wanted for actual in pool) for wanted in _conjuncts(expected))
 
 
 def apply_rls(
@@ -149,6 +241,94 @@ def apply_rls(
             for rule in policy.rls:
                 if not match_table(rule.table, table, index, rule.schema):
                     continue
+                if rule.is_expression:
+                    required = rule.predicate_columns(dialect)
+                    missing_columns = sorted(
+                        column for column in required if table.column(column) is None
+                    )
+                    if missing_columns:
+                        if rule.on_missing_column == "skip":
+                            continue
+                        key = (
+                            "missing_expr_cols",
+                            table.display_name,
+                            *missing_columns,
+                        )
+                        if key not in config_reported:
+                            config_reported.add(key)
+                            violations.append(
+                                Violation(
+                                    Code.RLS_CONFIG_ERROR,
+                                    Severity.ERROR,
+                                    f"RLS predicate targets missing column(s) on "
+                                    f"{table.display_name!r}: {', '.join(missing_columns)}",
+                                    table=table.display_name,
+                                )
+                            )
+                        continue
+
+                    pred, missing_params, invalid_params = _expression_predicate(
+                        rule,
+                        alias,
+                        params,
+                        dialect,
+                        policy.rls_parameterize,
+                    )
+                    for param_name in sorted(missing_params):
+                        key = ("missing_param", param_name)
+                        if key in config_reported:
+                            continue
+                        config_reported.add(key)
+                        violations.append(
+                            Violation(
+                                Code.RLS_PARAM_MISSING,
+                                Severity.ERROR,
+                                f"Missing RLS parameter {param_name!r}; refusing to run "
+                                f"an unfiltered query against {table.display_name!r}",
+                                table=table.display_name,
+                                hint=f"Pass params={{{param_name!r}: <value>}} to validate().",
+                            )
+                        )
+                    for param_name in sorted(invalid_params):
+                        key = ("bad_value", table.display_name, param_name)
+                        if key in config_reported:
+                            continue
+                        config_reported.add(key)
+                        violations.append(
+                            Violation(
+                                Code.RLS_CONFIG_ERROR,
+                                Severity.ERROR,
+                                f"RLS parameter {param_name!r} has an unsupported, empty, "
+                                "or context-inappropriate value",
+                                table=table.display_name,
+                            )
+                        )
+                    if missing_params or invalid_params:
+                        continue
+
+                    rendered = pred.sql(dialect=dialect)
+                    if _predicate_present(pool, pred):
+                        rewrites.append(
+                            Rewrite(
+                                RewriteKind.RLS_FILTER_PRESENT,
+                                "Row-level predicate already present; not duplicated",
+                                table=table.display_name,
+                                extra={"predicate": rendered},
+                            )
+                        )
+                        continue
+                    preds.append(pred)
+                    rewrites.append(
+                        Rewrite(
+                            RewriteKind.RLS_FILTER_ADDED,
+                            f"Applied row-level filter: {rendered}",
+                            table=table.display_name,
+                            extra={"predicate": rendered},
+                        )
+                    )
+                    continue
+
+                assert rule.column is not None
                 column_norm = index.normalize(rule.column)
                 if table.column(rule.column) is None:
                     if rule.on_missing_column == "skip":

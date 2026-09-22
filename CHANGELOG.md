@@ -7,6 +7,9 @@ versioning: [SemVer](https://semver.org). Violation `Code` values and
 ## [Unreleased]
 
 ### Added
+- Expression-based row-level security predicates with eager syntax/catalog
+  validation, named and list parameter binding, per-alias qualification,
+  structural deduplication, and existing join-aware placement strategies.
 - Column masking for explicit and star-expanded projections, with validated
   custom expressions, typed-null/redact/hash built-ins, CTE lineage support,
   predicate controls, deterministic rule precedence, and structured rewrite

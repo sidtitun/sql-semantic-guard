@@ -55,17 +55,17 @@ WHERE reference blocked by default / allowed with `allow_predicates`; laundering
 through a CTE still masked (lineage reuse); precedence deny>mask; bad template
 ⇒ `PolicyError`; hash built-in renders per dialect.
 
-## 2.2 Expression RLS rules (P1, 4 d)
+## 2.2 Expression RLS rules (P1, implemented)
 
 **Ask.** Real tenancy is rarely one equality: soft-delete filters, region
 lists, effective-dating.
 
 **Design.**
 - `RLSRule(table="orders", predicate="region IN :regions AND deleted_at IS NULL")`
-  — `predicate` mutually exclusive with `column`. Parsed at construction
-  (dialect-aware); named placeholders collected; unknown columns in the
-  predicate validated against the target table **at guard build** (same
-  eager fail-closed treatment as today's column rules).
+  — `predicate` mutually exclusive with `column`. Parsed generically at rule
+  construction and for the configured dialect at guard construction; named
+  placeholders are collected and unknown columns in the predicate are
+  validated against the target table **at guard build**.
 - Application (in `rls.apply_rls`): copy the parsed template per occurrence;
   rewrite every unqualified `exp.Column` to `table=alias`; substitute
   placeholders from `params` via `exp.convert` (`list/tuple` → IN expansion);

@@ -99,6 +99,30 @@ class SQLGuard:
     def _validate_rls_config(self) -> None:
         """Surface RLS misconfiguration at construction, not per query."""
         for rule in self.policy.rls:
+            if rule.is_expression and self.policy.rls_strategy == "require":
+                raise PolicyError(
+                    "rls_strategy='require' currently supports only column-based RLS rules"
+                )
+            if rule.is_expression:
+                template = rule.predicate_template(self.dialect)
+                function_errors = analyzer.function_gate(
+                    template,
+                    self.policy.effective_function_denylist(self.dialect),
+                    self.policy.function_allowlist,
+                    self.dialect,
+                )
+                function_errors.extend(
+                    analyzer.check_function_signatures(
+                        template,
+                        self.dialect,
+                        self.policy.effective_function_denylist(self.dialect),
+                        self.policy.function_allowlist,
+                    )
+                )
+                if function_errors:
+                    raise PolicyError(
+                        "invalid function in RLS predicate: " + function_errors[0].message
+                    )
             matched = [
                 t
                 for t in self.catalog.tables
@@ -108,11 +132,21 @@ class SQLGuard:
                 raise PolicyError(
                     f"RLS rule targets table {rule.table!r} which is not in the catalog"
                 )
+            required_columns = (
+                rule.predicate_columns(self.dialect)
+                if rule.is_expression
+                else frozenset({rule.column or ""})
+            )
             if rule.on_missing_column == "error":
-                missing = [t.display_name for t in matched if t.column(rule.column) is None]
+                missing = [
+                    f"{table.display_name}.{column}"
+                    for table in matched
+                    for column in required_columns
+                    if table.column(column) is None
+                ]
                 if missing:
                     raise PolicyError(
-                        f"RLS rule column {rule.column!r} missing on matched table(s): "
+                        "RLS rule column(s) missing on matched table(s): "
                         + ", ".join(sorted(missing)[:5])
                         + "; fix the rule or set on_missing_column='skip'"
                     )
@@ -452,9 +486,14 @@ class SQLGuard:
         lines.append("- Write exactly one read-only SELECT statement. No writes, DDL, or commands.")
         lines.append("- Only reference the tables and columns listed above.")
         if self.policy.rls:
-            rls_columns = sorted({r.column for r in self.policy.rls})
+            rls_descriptions: list[str] = []
+            for rule in self.policy.rls:
+                description = rule.predicate if rule.is_expression else rule.column
+                assert description is not None
+                rls_descriptions.append(description)
             lines.append(
-                f"- Row-level security on {', '.join(rls_columns)} is applied automatically; "
+                f"- Row-level security ({'; '.join(sorted(rls_descriptions))}) "
+                "is applied automatically; "
                 "do not add those filters yourself."
             )
         if self.policy.default_limit:

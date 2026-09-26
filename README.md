@@ -429,6 +429,7 @@ pip install -e '.[dev,all]'
 pytest          # 360+ tests, with a 90% coverage gate in CI
 ruff check .
 mypy            # strict typing is blocking in CI
+python -m evals.run  # frozen safety/rewriting corpus and release thresholds
 ```
 
 Where this is headed: [docs/ROADMAP.md](docs/ROADMAP.md) (phased enhancement

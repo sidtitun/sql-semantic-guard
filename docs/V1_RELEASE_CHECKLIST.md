@@ -17,8 +17,10 @@ has no known fail-open gaps, and published quality claims are reproducible.
 - [ ] Add named role policy sets with monotonic composition: an overlay may
   tighten a base policy but cannot resurrect denied access.
 - [ ] Add PII-safe audit records with a pluggable sink.
-- [ ] Publish a frozen evaluation corpus and gate semantic recall (>=95%),
-  false-block rate (<=2%), and rewrite idempotence (>=95%).
+- [x] Add a frozen SQL behavior corpus and gate safe-query acceptance (>=95%),
+  false-block rate (<=2%), unsafe-query rejection (100%), and rewrite
+  idempotence (>=95%). See [`evals/`](../evals/README.md). This measures guard
+  behavior, not end-to-end natural-language answer correctness.
 - [ ] Publish policy-as-config plus a CLI so release behavior is reproducible
   without application code.
 - [ ] Support named, pyformat, qmark, and numeric driver parameter styles with

@@ -9,8 +9,8 @@ analyst tool vs. a customer-facing chatbot).
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
 from sqlglot import exp, parse
@@ -240,6 +240,183 @@ class ColumnRule:
     def mask_template(self) -> exp.Expression | None:
         """Return a defensive copy of a validated custom mask expression."""
         return self._mask_template.copy() if self._mask_template is not None else None
+
+
+@dataclass
+class PolicyOverlay:
+    """Additional restrictions applied for one named application role.
+
+    Omitted values inherit the base policy. Rules are additive and resource
+    limits may only become smaller, so a role cannot reopen access granted by
+    neither its base policy nor another restrictive setting.
+    """
+
+    add_rls: Sequence[RLSRule] = ()
+    add_column_rules: Sequence[ColumnRule] = ()
+    add_function_denylist: frozenset[str] = frozenset()
+    function_allowlist: frozenset[str] | None = None
+    default_limit: int | None = None
+    max_limit: int | None = None
+    max_bytes_scanned: int | None = None
+    max_rows_scanned: int | None = None
+    max_joins: int | None = None
+    max_subquery_depth: int | None = None
+    max_ctes: int | None = None
+    max_union_branches: int | None = None
+    max_expression_nodes: int | None = None
+    require_partition_filter: bool | None = None
+    check_types: bool | None = None
+    check_function_signatures: bool | None = None
+    check_aggregation: bool | None = None
+    check_joins: bool | None = None
+    strict_joins: bool | None = None
+    require_declared_join_paths: bool | None = None
+    enforcement: str | None = None
+
+    def __post_init__(self) -> None:
+        self.add_rls = tuple(self.add_rls)
+        self.add_column_rules = tuple(self.add_column_rules)
+        if not isinstance(self.add_function_denylist, frozenset):
+            self.add_function_denylist = frozenset(self.add_function_denylist)
+        self.add_function_denylist = frozenset(
+            name.lower() for name in self.add_function_denylist
+        )
+        if self.function_allowlist is not None and not isinstance(
+            self.function_allowlist, frozenset
+        ):
+            self.function_allowlist = frozenset(self.function_allowlist)
+        if self.function_allowlist is not None:
+            self.function_allowlist = frozenset(name.lower() for name in self.function_allowlist)
+        for name in (
+            "default_limit",
+            "max_limit",
+            "max_bytes_scanned",
+            "max_rows_scanned",
+            "max_joins",
+            "max_subquery_depth",
+            "max_ctes",
+            "max_union_branches",
+            "max_expression_nodes",
+        ):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise PolicyError(f"{name} must be positive or None")
+        for name in (
+            "require_partition_filter",
+            "check_types",
+            "check_function_signatures",
+            "check_aggregation",
+            "check_joins",
+            "strict_joins",
+            "require_declared_join_paths",
+        ):
+            value = getattr(self, name)
+            if value not in (None, True):
+                raise PolicyError(f"role overlays may only enable {name}")
+        if self.enforcement not in (None, "block"):
+            raise PolicyError("role overlays may only tighten enforcement to 'block'")
+
+
+def _restricted_limit(base: int | None, overlay: int | None, name: str) -> int | None:
+    """Merge a ceiling while rejecting a role that would loosen it."""
+    if overlay is None:
+        return base
+    if base is not None and overlay > base:
+        raise PolicyError(
+            f"role overlay {name}={overlay} would loosen base policy {name}={base}"
+        )
+    return overlay
+
+
+@dataclass
+class PolicySet:
+    """A base policy plus named, monotonic role restrictions.
+
+    A resolved role always includes every base RLS and column rule. Role
+    policies are created and validated eagerly so configuration mistakes fail
+    at application startup instead of during a request.
+    """
+
+    base: "Policy"
+    roles: Mapping[str, PolicyOverlay] = field(default_factory=dict)
+    _resolved: dict[str, "Policy"] = field(init=False, repr=False, default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.base, Policy):
+            raise PolicyError("PolicySet.base must be a Policy")
+        self.roles = dict(self.roles)
+        for role, overlay in self.roles.items():
+            if not isinstance(role, str) or not role.strip():
+                raise PolicyError("role names must be non-empty strings")
+            if not isinstance(overlay, PolicyOverlay):
+                raise PolicyError(f"role {role!r} must map to a PolicyOverlay")
+        # Resolve all roles now. This is deliberately eager: deployment config
+        # errors should never first surface on a caller's request.
+        for role in self.roles:
+            self._resolved[role] = self._merge(self.base, self.roles[role])
+
+    def resolve(self, role: str | None = None) -> "Policy":
+        if role is None:
+            return self.base
+        try:
+            return self._resolved[role]
+        except KeyError as exc:
+            known = ", ".join(sorted(self._resolved)) or "(none)"
+            raise PolicyError(f"unknown role {role!r}; configured roles: {known}") from exc
+
+    @staticmethod
+    def _merge(base: "Policy", overlay: PolicyOverlay) -> "Policy":
+        allowlist = base.function_allowlist
+        if overlay.function_allowlist is not None:
+            allowlist = (
+                overlay.function_allowlist
+                if allowlist is None
+                else allowlist & overlay.function_allowlist
+            )
+        values = {
+            "rls": tuple(base.rls) + tuple(overlay.add_rls),
+            "column_rules": tuple(base.column_rules) + tuple(overlay.add_column_rules),
+            "extra_function_denylist": (
+                base.extra_function_denylist | overlay.add_function_denylist
+            ),
+            "function_allowlist": allowlist,
+            "default_limit": _restricted_limit(
+                base.default_limit, overlay.default_limit, "default_limit"
+            ),
+            "max_limit": _restricted_limit(base.max_limit, overlay.max_limit, "max_limit"),
+            "max_bytes_scanned": _restricted_limit(
+                base.max_bytes_scanned, overlay.max_bytes_scanned, "max_bytes_scanned"
+            ),
+            "max_rows_scanned": _restricted_limit(
+                base.max_rows_scanned, overlay.max_rows_scanned, "max_rows_scanned"
+            ),
+            "max_joins": _restricted_limit(base.max_joins, overlay.max_joins, "max_joins"),
+            "max_subquery_depth": _restricted_limit(
+                base.max_subquery_depth, overlay.max_subquery_depth, "max_subquery_depth"
+            ),
+            "max_ctes": _restricted_limit(base.max_ctes, overlay.max_ctes, "max_ctes"),
+            "max_union_branches": _restricted_limit(
+                base.max_union_branches, overlay.max_union_branches, "max_union_branches"
+            ),
+            "max_expression_nodes": _restricted_limit(
+                base.max_expression_nodes, overlay.max_expression_nodes, "max_expression_nodes"
+            ),
+            "require_partition_filter": (
+                True if overlay.require_partition_filter else base.require_partition_filter
+            ),
+            "check_types": base.check_types or bool(overlay.check_types),
+            "check_function_signatures": (
+                base.check_function_signatures or bool(overlay.check_function_signatures)
+            ),
+            "check_aggregation": base.check_aggregation or bool(overlay.check_aggregation),
+            "check_joins": base.check_joins or bool(overlay.check_joins),
+            "strict_joins": base.strict_joins or bool(overlay.strict_joins),
+            "require_declared_join_paths": (
+                base.require_declared_join_paths or bool(overlay.require_declared_join_paths)
+            ),
+            "enforcement": "block" if overlay.enforcement == "block" else base.enforcement,
+        }
+        return replace(base, **values)
 
 
 @dataclass

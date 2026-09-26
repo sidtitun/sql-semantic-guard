@@ -186,6 +186,7 @@ class QueryStats:
     """Metadata gathered while validating (independent of pass/fail)."""
 
     statement: str = "select"
+    role: str | None = None
     tables: list[str] = field(default_factory=list)
     referenced_columns: dict[str, list[str]] = field(default_factory=dict)
     cost: CostEstimate | None = None
@@ -196,6 +197,7 @@ class QueryStats:
     def to_dict(self) -> dict[str, Any]:
         return {
             "statement": self.statement,
+            "role": self.role,
             "tables": list(self.tables),
             "referenced_columns": {k: list(v) for k, v in self.referenced_columns.items()},
             "cost": self.cost.to_dict() if self.cost else None,

@@ -29,7 +29,7 @@ from sqlguard.catalog import Catalog, Column, ForeignKey, Table
 from sqlguard.cost import CostEstimator, EstimateInputs, HeuristicCostEstimator
 from sqlguard.errors import CatalogError, PolicyError, SQLGuardError, ValidationFailed
 from sqlguard.guard import SQLGuard
-from sqlguard.policy import ColumnRule, Policy, RLSRule
+from sqlguard.policy import ColumnRule, Policy, PolicyOverlay, PolicySet, RLSRule
 from sqlguard.violations import (
     Code,
     CostEstimate,
@@ -51,6 +51,8 @@ __all__ = [
     "Column",
     "ForeignKey",
     "Policy",
+    "PolicyOverlay",
+    "PolicySet",
     "RLSRule",
     "ColumnRule",
     "ValidationResult",

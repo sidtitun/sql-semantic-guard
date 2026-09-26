@@ -22,7 +22,7 @@ from sqlglot.dialects.dialect import Dialect
 from sqlguard import analyzer, cost, rewrite, rls, semantics
 from sqlguard.catalog import Catalog, CatalogIndex, match_table
 from sqlguard.errors import PolicyError, ValidationFailed
-from sqlguard.policy import ColumnRule, Policy
+from sqlguard.policy import ColumnRule, Policy, PolicySet
 from sqlguard.scopeindex import ScopeIndex
 from sqlguard.violations import (
     Code,
@@ -76,7 +76,7 @@ class SQLGuard:
     def __init__(
         self,
         catalog: Catalog,
-        policy: Policy | None = None,
+        policy: Policy | PolicySet | None = None,
         dialect: str = "postgres",
         estimators: Sequence[cost.CostEstimator] | None = None,
     ) -> None:
@@ -87,19 +87,23 @@ class SQLGuard:
         except Exception as e:
             raise PolicyError(f"Unknown SQL dialect {dialect!r}: {e}") from e
         self.catalog = catalog
-        self.policy = policy or Policy()
+        self.policy_set = policy if isinstance(policy, PolicySet) else None
+        self.policy = self.policy_set.base if self.policy_set is not None else (policy or Policy())
         self.index = CatalogIndex(catalog, self.dialect)
         self.estimators: list[cost.CostEstimator] = (
             list(estimators) if estimators is not None else [cost.HeuristicCostEstimator()]
         )
-        self._validate_rls_config()
+        self._validate_rls_config(self.policy)
+        if self.policy_set is not None:
+            for role in self.policy_set.roles:
+                self._validate_rls_config(self.policy_set.resolve(role))
 
     # ------------------------------------------------------------------ #
 
-    def _validate_rls_config(self) -> None:
+    def _validate_rls_config(self, policy: Policy) -> None:
         """Surface RLS misconfiguration at construction, not per query."""
-        for rule in self.policy.rls:
-            if rule.is_expression and self.policy.rls_strategy == "require":
+        for rule in policy.rls:
+            if rule.is_expression and policy.rls_strategy == "require":
                 raise PolicyError(
                     "rls_strategy='require' currently supports only column-based RLS rules"
                 )
@@ -107,16 +111,16 @@ class SQLGuard:
                 template = rule.predicate_template(self.dialect)
                 function_errors = analyzer.function_gate(
                     template,
-                    self.policy.effective_function_denylist(self.dialect),
-                    self.policy.function_allowlist,
+                    policy.effective_function_denylist(self.dialect),
+                    policy.function_allowlist,
                     self.dialect,
                 )
                 function_errors.extend(
                     analyzer.check_function_signatures(
                         template,
                         self.dialect,
-                        self.policy.effective_function_denylist(self.dialect),
-                        self.policy.function_allowlist,
+                        policy.effective_function_denylist(self.dialect),
+                        policy.function_allowlist,
                     )
                 )
                 if function_errors:
@@ -154,11 +158,12 @@ class SQLGuard:
     # ------------------------------------------------------------------ #
 
     def validate(
-        self, sql: str, params: Mapping[str, Any] | None = None
+        self, sql: str, params: Mapping[str, Any] | None = None, *, role: str | None = None
     ) -> ValidationResult:
         """Validate one statement. Never raises for problems *in the SQL*."""
+        policy = self._policy_for_role(role)
         try:
-            return self._validate(sql, dict(params or {}))
+            return self._validate(sql, dict(params or {}), policy, role)
         except Exception as e:  # pragma: no cover - safety net
             logger.exception("sqlguard internal error while validating")
             return ValidationResult(
@@ -177,21 +182,30 @@ class SQLGuard:
             )
 
     def validate_or_raise(
-        self, sql: str, params: Mapping[str, Any] | None = None
+        self, sql: str, params: Mapping[str, Any] | None = None, *, role: str | None = None
     ) -> ValidationResult:
         """Like :meth:`validate`, raising :class:`ValidationFailed` on errors."""
-        result = self.validate(sql, params)
+        result = self.validate(sql, params, role=role)
         if not result.valid:
             raise ValidationFailed(result)
         return result
 
     # ------------------------------------------------------------------ #
 
-    def _validate(self, sql: str, params: dict[str, Any]) -> ValidationResult:
-        policy, dialect, index = self.policy, self.dialect, self.index
+    def _policy_for_role(self, role: str | None) -> Policy:
+        if self.policy_set is None:
+            if role is not None:
+                raise PolicyError("role was supplied but this guard has no PolicySet")
+            return self.policy
+        return self.policy_set.resolve(role)
+
+    def _validate(
+        self, sql: str, params: dict[str, Any], policy: Policy, role: str | None
+    ) -> ValidationResult:
+        dialect, index = self.dialect, self.index
         violations: list[Violation] = []
         rewrites: list[Rewrite] = []
-        stats = QueryStats()
+        stats = QueryStats(role=role)
         run, skipped = stats.checks_run, stats.checks_skipped
         audited_sql: str | None = None
         all_checks = [
@@ -466,12 +480,13 @@ class SQLGuard:
 
     # ------------------------------------------------------------------ #
 
-    def policy_prompt(self, max_tables: int = 50) -> str:
+    def policy_prompt(self, max_tables: int = 50, *, role: str | None = None) -> str:
         """A schema+rules block to include in the SQL-generation prompt.
 
         Prevention beats repair: telling the model the real schema and the
         house rules up front cuts violation rates dramatically.
         """
+        policy = self._policy_for_role(role)
         lines: list[str] = [f"You are writing {self.dialect} SQL. Available tables:"]
         for t in self.catalog.tables[:max_tables]:
             cols = ", ".join(f"{c.name} {c.type}" for c in t.columns)
@@ -485,9 +500,9 @@ class SQLGuard:
         lines.append("Rules:")
         lines.append("- Write exactly one read-only SELECT statement. No writes, DDL, or commands.")
         lines.append("- Only reference the tables and columns listed above.")
-        if self.policy.rls:
+        if policy.rls:
             rls_descriptions: list[str] = []
-            for rule in self.policy.rls:
+            for rule in policy.rls:
                 description = rule.predicate if rule.is_expression else rule.column
                 assert description is not None
                 rls_descriptions.append(description)
@@ -496,12 +511,12 @@ class SQLGuard:
                 "is applied automatically; "
                 "do not add those filters yourself."
             )
-        if self.policy.default_limit:
+        if policy.default_limit:
             lines.append(
-                f"- Results are capped at {self.policy.default_limit} rows unless you "
+                f"- Results are capped at {policy.default_limit} rows unless you "
                 "specify a smaller LIMIT."
             )
-        denied = [r for r in self.policy.column_rules if r.action == "deny"]
+        denied = [r for r in policy.column_rules if r.action == "deny"]
         if denied:
             descriptions: list[str] = []
             for r in denied:
@@ -519,7 +534,7 @@ class SQLGuard:
                     "- Never reference these restricted columns: "
                     + ", ".join(dict.fromkeys(descriptions))
                 )
-        masked = [r for r in self.policy.column_rules if r.action == "mask"]
+        masked = [r for r in policy.column_rules if r.action == "mask"]
         if masked:
             descriptions = []
             for r in masked:
@@ -535,7 +550,7 @@ class SQLGuard:
                     + ". Do not use them in predicates unless the policy permits it."
                 )
         parted = [t for t in self.catalog.tables if t.partition_columns]
-        if parted and self.policy.effective_require_partition_filter(self.dialect):
+        if parted and policy.effective_require_partition_filter(self.dialect):
             lines.append(
                 "- Always filter partitioned tables on a partition column "
                 "(otherwise the query is rejected)."
@@ -566,7 +581,7 @@ class SQLGuard:
         db_url: str,
         schemas: Sequence[str] | None = None,
         dialect: str | None = None,
-        policy: Policy | None = None,
+        policy: Policy | PolicySet | None = None,
         include_stats: bool = True,
         estimators: Sequence[cost.CostEstimator] | None = None,
         **policy_kwargs: Any,

@@ -87,8 +87,13 @@ class SQLGuard:
         except Exception as e:
             raise PolicyError(f"Unknown SQL dialect {dialect!r}: {e}") from e
         self.catalog = catalog
-        self.policy_set = policy if isinstance(policy, PolicySet) else None
-        self.policy = self.policy_set.base if self.policy_set is not None else (policy or Policy())
+        self.policy_set: PolicySet | None = policy if isinstance(policy, PolicySet) else None
+        if self.policy_set is not None:
+            self.policy: Policy = self.policy_set.base
+        elif policy is None:
+            self.policy = Policy()
+        else:
+            self.policy = policy
         self.index = CatalogIndex(catalog, self.dialect)
         self.estimators: list[cost.CostEstimator] = (
             list(estimators) if estimators is not None else [cost.HeuristicCostEstimator()]

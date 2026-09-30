@@ -337,9 +337,9 @@ class PolicySet:
     at application startup instead of during a request.
     """
 
-    base: "Policy"
+    base: Policy
     roles: Mapping[str, PolicyOverlay] = field(default_factory=dict)
-    _resolved: dict[str, "Policy"] = field(init=False, repr=False, default_factory=dict)
+    _resolved: dict[str, Policy] = field(init=False, repr=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.base, Policy):
@@ -355,7 +355,7 @@ class PolicySet:
         for role in self.roles:
             self._resolved[role] = self._merge(self.base, self.roles[role])
 
-    def resolve(self, role: str | None = None) -> "Policy":
+    def resolve(self, role: str | None = None) -> Policy:
         if role is None:
             return self.base
         try:
@@ -365,7 +365,7 @@ class PolicySet:
             raise PolicyError(f"unknown role {role!r}; configured roles: {known}") from exc
 
     @staticmethod
-    def _merge(base: "Policy", overlay: PolicyOverlay) -> "Policy":
+    def _merge(base: Policy, overlay: PolicyOverlay) -> Policy:
         allowlist = base.function_allowlist
         if overlay.function_allowlist is not None:
             allowlist = (

@@ -373,50 +373,50 @@ class PolicySet:
                 if allowlist is None
                 else allowlist & overlay.function_allowlist
             )
-        values = {
-            "rls": tuple(base.rls) + tuple(overlay.add_rls),
-            "column_rules": tuple(base.column_rules) + tuple(overlay.add_column_rules),
-            "extra_function_denylist": (
+        return replace(
+            base,
+            rls=tuple(base.rls) + tuple(overlay.add_rls),
+            column_rules=tuple(base.column_rules) + tuple(overlay.add_column_rules),
+            extra_function_denylist=(
                 base.extra_function_denylist | overlay.add_function_denylist
             ),
-            "function_allowlist": allowlist,
-            "default_limit": _restricted_limit(
+            function_allowlist=allowlist,
+            default_limit=_restricted_limit(
                 base.default_limit, overlay.default_limit, "default_limit"
             ),
-            "max_limit": _restricted_limit(base.max_limit, overlay.max_limit, "max_limit"),
-            "max_bytes_scanned": _restricted_limit(
+            max_limit=_restricted_limit(base.max_limit, overlay.max_limit, "max_limit"),
+            max_bytes_scanned=_restricted_limit(
                 base.max_bytes_scanned, overlay.max_bytes_scanned, "max_bytes_scanned"
             ),
-            "max_rows_scanned": _restricted_limit(
+            max_rows_scanned=_restricted_limit(
                 base.max_rows_scanned, overlay.max_rows_scanned, "max_rows_scanned"
             ),
-            "max_joins": _restricted_limit(base.max_joins, overlay.max_joins, "max_joins"),
-            "max_subquery_depth": _restricted_limit(
+            max_joins=_restricted_limit(base.max_joins, overlay.max_joins, "max_joins"),
+            max_subquery_depth=_restricted_limit(
                 base.max_subquery_depth, overlay.max_subquery_depth, "max_subquery_depth"
             ),
-            "max_ctes": _restricted_limit(base.max_ctes, overlay.max_ctes, "max_ctes"),
-            "max_union_branches": _restricted_limit(
+            max_ctes=_restricted_limit(base.max_ctes, overlay.max_ctes, "max_ctes"),
+            max_union_branches=_restricted_limit(
                 base.max_union_branches, overlay.max_union_branches, "max_union_branches"
             ),
-            "max_expression_nodes": _restricted_limit(
+            max_expression_nodes=_restricted_limit(
                 base.max_expression_nodes, overlay.max_expression_nodes, "max_expression_nodes"
             ),
-            "require_partition_filter": (
+            require_partition_filter=(
                 True if overlay.require_partition_filter else base.require_partition_filter
             ),
-            "check_types": base.check_types or bool(overlay.check_types),
-            "check_function_signatures": (
+            check_types=base.check_types or bool(overlay.check_types),
+            check_function_signatures=(
                 base.check_function_signatures or bool(overlay.check_function_signatures)
             ),
-            "check_aggregation": base.check_aggregation or bool(overlay.check_aggregation),
-            "check_joins": base.check_joins or bool(overlay.check_joins),
-            "strict_joins": base.strict_joins or bool(overlay.strict_joins),
-            "require_declared_join_paths": (
+            check_aggregation=base.check_aggregation or bool(overlay.check_aggregation),
+            check_joins=base.check_joins or bool(overlay.check_joins),
+            strict_joins=base.strict_joins or bool(overlay.strict_joins),
+            require_declared_join_paths=(
                 base.require_declared_join_paths or bool(overlay.require_declared_join_paths)
             ),
-            "enforcement": "block" if overlay.enforcement == "block" else base.enforcement,
-        }
-        return replace(base, **values)
+            enforcement="block" if overlay.enforcement == "block" else base.enforcement,
+        )
 
 
 @dataclass

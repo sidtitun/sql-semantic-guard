@@ -93,6 +93,7 @@ class SQLGuard:
         elif policy is None:
             self.policy = Policy()
         else:
+            assert isinstance(policy, Policy)
             self.policy = policy
         self.index = CatalogIndex(catalog, self.dialect)
         self.estimators: list[cost.CostEstimator] = (

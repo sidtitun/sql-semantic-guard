@@ -391,6 +391,22 @@ result = guard.validate(sql_from_llm, params=trusted_context, role="support")
 Roles are checked when the guard starts. An unknown role raises `PolicyError`;
 the selected role is included in `result.stats` and `result.to_dict()`.
 
+## Audit and observability
+
+Capture validation decisions without storing raw SQL or parameter values:
+
+```python
+records = []  # Use a thread-safe durable sink in production.
+guard = SQLGuard(catalog, Policy(audit_sink=records.append))
+result = guard.validate(sql_from_llm, params=trusted_context)
+record = records[-1].to_dict()
+```
+
+Audit records include roles, verdicts, violation codes, rewrites, cost, timing,
+and a SQL hash. Shadow-mode and rejected queries are recorded too. Optional
+`sqlguard.otel.instrument(guard)` exports spans and counters with the `[otel]`
+extra. See [audit configuration, privacy, and delivery behavior](docs/AUDITING.md).
+
 ## Live schema reflection
 
 Skip hand-writing the catalog:

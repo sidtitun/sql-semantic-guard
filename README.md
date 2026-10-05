@@ -360,6 +360,37 @@ empty parameters fail closed. Expression rules support the `predicate` and
 `subquery` strategies; `require` and conflict diagnostics remain available for
 the simpler equality rules.
 
+## Role-specific policies
+
+Use one guard when roles share a catalog but need different restrictions. A
+role overlay adds rules and can only lower resource limits or enable stricter
+checks. It cannot remove a base rule or raise a base limit.
+
+```python
+from sqlguard import ColumnRule, Policy, PolicyOverlay, PolicySet, SQLGuard
+
+policies = PolicySet(
+    base=Policy(default_limit=1_000),
+    roles={
+        "analyst": PolicyOverlay(
+            add_column_rules=[
+                ColumnRule(tags={"pii"}, action="mask", mask_with="hash"),
+            ]
+        ),
+        "support": PolicyOverlay(
+            add_column_rules=[ColumnRule(tags={"pii"}, action="deny")],
+            max_bytes_scanned=1 << 30,
+        ),
+    },
+)
+guard = SQLGuard(catalog, policies, dialect="postgres")
+
+result = guard.validate(sql_from_llm, params=trusted_context, role="support")
+```
+
+Roles are checked when the guard starts. An unknown role raises `PolicyError`;
+the selected role is included in `result.stats` and `result.to_dict()`.
+
 ## Live schema reflection
 
 Skip hand-writing the catalog:

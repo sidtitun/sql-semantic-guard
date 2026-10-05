@@ -83,7 +83,7 @@ lists, effective-dating.
 alias; bad predicate column ⇒ `PolicyError` at build; dedupe when identical
 predicate already present.
 
-## 2.3 Role-based policy sets (P1, 4 d)
+## 2.3 Role-based policy sets (P1, implemented)
 
 **Design.**
 ```python
@@ -110,6 +110,14 @@ class PolicySet:
 - `guard.validate(sql, params=…, role="support")`; unknown role ⇒
   `PolicyError`; `role=None` ⇒ base. `role` recorded in `QueryStats` and the
   audit record (2.5). `policy_prompt(role=…)` renders the merged view.
+
+**Outcome (implemented 2026-09-26).** `PolicySet(base, roles)` resolves all
+roles eagerly at guard construction. `PolicyOverlay` adds RLS, column, and
+function-deny rules and can lower resource ceilings or enable stricter checks.
+It cannot remove a base rule, raise a ceiling, disable a check, or switch an
+enforcing policy into shadow mode. `validate(..., role=...)`,
+`validate_or_raise(..., role=...)`, and `policy_prompt(role=...)` all use the
+same resolved policy; the selected role is recorded in `QueryStats`.
 
 **Tests:** two roles, different visibility on one guard; overlay tightens
 budget; unknown role raises; monotonicity (overlay cannot resurrect a

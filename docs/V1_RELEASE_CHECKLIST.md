@@ -14,7 +14,7 @@ has no known fail-open gaps, and published quality claims are reproducible.
   derived-star resolution.
 - [ ] Add high-use function signature checks.
 - [ ] Add type-preserving column masking and expression-based RLS.
-- [ ] Add named role policy sets with monotonic composition: an overlay may
+- [x] Add named role policy sets with monotonic composition: an overlay may
   tighten a base policy but cannot resurrect denied access.
 - [ ] Add PII-safe audit records with a pluggable sink.
 - [x] Add a frozen SQL behavior corpus and gate safe-query acceptance (>=95%),

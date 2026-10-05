@@ -9,13 +9,14 @@ analyst tool vs. a customer-facing chatbot).
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError
 
+from sqlguard.audit import AuditRecord
 from sqlguard.errors import PolicyError
 
 # Dangerous-by-default functions, per dialect. These either write state, take
@@ -480,10 +481,16 @@ class Policy:
     # locking clauses, internal errors) — always block, even in shadow mode.
     enforcement: str = "block"  # block | log_only
 
+    # Observability (inherited unchanged by every role).
+    audit_sink: Callable[[AuditRecord], None] | None = None
+    audit_include_sql: bool = False
+
     # Output
     pretty_sql: bool = False
 
     def __post_init__(self) -> None:
+        if self.audit_sink is not None and not callable(self.audit_sink):
+            raise PolicyError("audit_sink must be callable or None")
         for s in self.allowed_statements:
             if s.lower() != "select":
                 raise PolicyError(

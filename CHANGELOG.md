@@ -7,6 +7,8 @@ versioning: [SemVer](https://semver.org). Violation `Code` values and
 ## [Unreleased]
 
 ### Added
+- Immutable audit records with opt-in SQL capture, inherited role sinks, isolated
+  sink failures, and optional OpenTelemetry validation spans and counters.
 - Named `PolicySet` role policies with additive RLS/column/function rules,
   monotonic resource/check enforcement, eager configuration validation, and
   role-aware validation and prompt APIs.

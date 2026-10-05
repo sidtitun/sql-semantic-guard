@@ -145,7 +145,7 @@ with the measured value and ceiling in `extra`.
 **Tests:** each ceiling triggers precisely at N+1; combined with shadow mode;
 zero overhead when unset (bench).
 
-## 2.5 Audit & observability hooks (P1, 3 d)
+## 2.5 Audit & observability hooks (P1, implemented)
 
 **Design.**
 ```python
@@ -173,6 +173,13 @@ class AuditRecord:
 
 **Tests:** sink receives records for valid/invalid/internal-error; sink raise
 is swallowed; no raw SQL by default; duration populated; codes match result.
+
+**Outcome (implemented 2026-10-05).** Immutable records cover validation results
+and configuration/internal errors. Base-policy sinks are inherited by roles;
+failures log generic warnings and never affect serving. Optional `[otel]`
+instrumentation exports completion spans with validation timestamps and bounded
+verdict/code counters. It does not set a current span inside the pipeline.
+See [audit reference](../AUDITING.md) for privacy, sink delivery, and SDK setup.
 
 ## 2.6 Driver paramstyle matrix (P2, 2 d)
 

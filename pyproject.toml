@@ -38,10 +38,11 @@ classifiers = [
 dependencies = ["sqlglot>=30.18,<31"]
 
 [project.optional-dependencies]
+otel = ["opentelemetry-api>=1.20,<2"]
 postgres = ["sqlalchemy>=2.0"]
 athena = ["boto3>=1.28"]
 all = ["sqlalchemy>=2.0", "boto3>=1.28"]
-dev = ["pytest>=7.4", "pytest-cov>=4.1", "hypothesis>=6.100", "ruff>=0.4", "mypy>=1.8,<2", "sqlalchemy>=2.0"]
+dev = ["opentelemetry-sdk>=1.20,<2", "pytest>=7.4", "pytest-cov>=4.1", "hypothesis>=6.100", "ruff>=0.4", "mypy>=1.8,<2", "sqlalchemy>=2.0"]
 
 [project.urls]
 Homepage = "https://github.com/sidtitun/sql-semantic-guard"

@@ -12,14 +12,18 @@ policy, dialect) and share it.
 
 from __future__ import annotations
 
+import hashlib
 import logging
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 
 from sqlguard import analyzer, cost, rewrite, rls, semantics
+from sqlguard.audit import AuditRecord
 from sqlguard.catalog import Catalog, CatalogIndex, match_table
 from sqlguard.errors import PolicyError, ValidationFailed
 from sqlguard.policy import ColumnRule, Policy, PolicySet
@@ -95,6 +99,7 @@ class SQLGuard:
         else:
             assert isinstance(policy, Policy)
             self.policy = policy
+        self._audit_observers: list[Callable[[AuditRecord], None]] = []
         self.index = CatalogIndex(catalog, self.dialect)
         self.estimators: list[cost.CostEstimator] = (
             list(estimators) if estimators is not None else [cost.HeuristicCostEstimator()]
@@ -167,25 +172,71 @@ class SQLGuard:
         self, sql: str, params: Mapping[str, Any] | None = None, *, role: str | None = None
     ) -> ValidationResult:
         """Validate one statement. Never raises for problems *in the SQL*."""
-        policy = self._policy_for_role(role)
+        # Snapshot observers at entry; configure instrumentation at startup.
+        observers = tuple(self._audit_observers)
+        policy = self.policy
+        auditing = policy.audit_sink is not None or bool(observers)
+        started = time.perf_counter() if auditing else 0.0
+        at = datetime.now(timezone.utc) if auditing else None
+        result: ValidationResult | None = None
+        error_type: str | None = None
         try:
-            return self._validate(sql, dict(params or {}), policy, role)
-        except Exception as e:  # pragma: no cover - safety net
-            logger.exception("sqlguard internal error while validating")
-            return ValidationResult(
-                valid=False,
-                sql=None,
-                original_sql=sql,
-                dialect=self.dialect,
-                violations=[
-                    Violation(
-                        Code.INTERNAL_ERROR,
-                        Severity.ERROR,
-                        f"Validator error ({type(e).__name__}); failing closed",
-                        hint="Simplify the query or report this as a sqlguard bug.",
+            try:
+                policy = self._policy_for_role(role)
+            except PolicyError:
+                error_type = "PolicyError"
+                raise
+            try:
+                result = self._validate(sql, dict(params or {}), policy, role)
+            except Exception as e:  # safety net: never expose exception contents
+                error_type = type(e).__name__
+                logger.error("sqlguard internal error while validating (%s)", error_type)
+                result = ValidationResult(
+                    valid=False,
+                    sql=None,
+                    original_sql=sql,
+                    dialect=self.dialect,
+                    stats=QueryStats(role=role),
+                    violations=[
+                        Violation(
+                            Code.INTERNAL_ERROR,
+                            Severity.ERROR,
+                            f"Validator error ({error_type}); failing closed",
+                            hint="Simplify the query or report this as a sqlguard bug.",
+                        )
+                    ],
+                )
+            return result
+        finally:
+            if at is not None:
+                # Audit construction/delivery must never replace a verdict or
+                # a configuration exception. Do not log sink exception text:
+                # it may contain SQL or parameter values.
+                try:
+                    record = AuditRecord(
+                        at=at,
+                        dialect=self.dialect,
+                        role=role,
+                        sql_sha256=hashlib.sha256(sql.encode("utf-8", errors="surrogatepass")).hexdigest(),
+                        param_keys=tuple(sorted(params.keys())) if params is not None else (),
+                        valid=result.valid if result is not None else False,
+                        would_block=result.would_block if result is not None else False,
+                        violation_codes=tuple(dict.fromkeys(v.code.value for v in result.violations)) if result is not None else (),
+                        rewrite_kinds=tuple(dict.fromkeys(r.kind.value for r in result.rewrites)) if result is not None else (),
+                        tables=tuple(result.stats.tables) if result is not None else (),
+                        estimated_bytes=result.stats.cost.bytes_scanned if result is not None and result.stats.cost else None,
+                        duration_ms=(time.perf_counter() - started) * 1000,
+                        error_type=error_type,
+                        sql=sql if policy.audit_include_sql else None,
                     )
-                ],
-            )
+                    sinks = ((policy.audit_sink,) if policy.audit_sink is not None else ()) + observers
+                    for sink in sinks:
+                        try:
+                            sink(record)
+                        except Exception:
+                            logger.warning("sqlguard audit sink failed; record delivery lost")
+                except Exception:
+                    logger.warning("sqlguard audit record could not be constructed")
 
     def validate_or_raise(
         self, sql: str, params: Mapping[str, Any] | None = None, *, role: str | None = None

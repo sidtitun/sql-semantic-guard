@@ -16,7 +16,7 @@ has no known fail-open gaps, and published quality claims are reproducible.
 - [ ] Add type-preserving column masking and expression-based RLS.
 - [x] Add named role policy sets with monotonic composition: an overlay may
   tighten a base policy but cannot resurrect denied access.
-- [ ] Add PII-safe audit records with a pluggable sink.
+- [x] Add PII-safe audit records with a pluggable sink.
 - [x] Add a frozen SQL behavior corpus and gate safe-query acceptance (>=95%),
   false-block rate (<=2%), unsafe-query rejection (100%), and rewrite
   idempotence (>=95%). See [`evals/`](../evals/README.md). This measures guard

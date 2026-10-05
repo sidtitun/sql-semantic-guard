@@ -25,6 +25,7 @@ Quickstart::
         llm_repair(result.feedback())
 """
 
+from sqlguard.audit import AuditRecord
 from sqlguard.catalog import Catalog, Column, ForeignKey, Table
 from sqlguard.cost import CostEstimator, EstimateInputs, HeuristicCostEstimator
 from sqlguard.errors import CatalogError, PolicyError, SQLGuardError, ValidationFailed
@@ -46,6 +47,7 @@ __version__ = "0.2.0"
 
 __all__ = [
     "SQLGuard",
+    "AuditRecord",
     "Catalog",
     "Table",
     "Column",

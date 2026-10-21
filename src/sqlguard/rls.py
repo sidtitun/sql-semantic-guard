@@ -93,7 +93,7 @@ class _InValues(list[exp.Expression]):
     """Typed marker distinguishing an IN-list from a scalar expression."""
 
 
-def _convert_value(value: Any) -> exp.Expression | _InValues | None:
+def _convert_value(value: Any, bind: bool = False) -> exp.Expression | _InValues | None:
     try:
         if isinstance(value, (list, tuple, set, frozenset)):
             values = (
@@ -101,11 +101,19 @@ def _convert_value(value: Any) -> exp.Expression | _InValues | None:
                 if isinstance(value, (set, frozenset))
                 else value
             )
-            items = _InValues(cast(exp.Expression, exp.convert(v)) for v in values)
+            items = _InValues()
+            for v in values:
+                item = cast(exp.Expression, exp.convert(v))
+                if bind:
+                    item.meta["sqlguard_bind_value"] = v
+                items.append(item)
             if not items:
                 return None
             return items
-        return cast(exp.Expression, exp.convert(value))
+        item = cast(exp.Expression, exp.convert(value))
+        if bind:
+            item.meta["sqlguard_bind_value"] = value
+        return item
     except Exception:
         return None
 
@@ -125,6 +133,7 @@ def _expression_predicate(
     params: Mapping[str, Any],
     dialect: str,
     parameterize: bool,
+    bind: bool = False,
 ) -> tuple[exp.Expression, set[str], set[str]]:
     """Bind an expression rule, returning predicate, missing params, bad params."""
     predicate = rule.predicate_template(dialect)
@@ -144,7 +153,7 @@ def _expression_predicate(
                 if not parameterize:
                     missing.add(name)
             else:
-                converted = _convert_value(params[name])
+                converted = _convert_value(params[name], bind)
                 if converted is None:
                     invalid.add(name)
                 elif isinstance(converted, _InValues):
@@ -169,7 +178,7 @@ def _expression_predicate(
                     missing.add(name)
                 expanded.append(item)
                 continue
-            converted = _convert_value(params[name])
+            converted = _convert_value(params[name], bind)
             if converted is None:
                 invalid.add(name)
                 expanded.append(item)
@@ -188,7 +197,7 @@ def _expression_predicate(
             if not parameterize:
                 missing.add(name)
             continue
-        converted = _convert_value(params[name])
+        converted = _convert_value(params[name], bind)
         if converted is None or isinstance(converted, _InValues):
             invalid.add(name)
             continue
@@ -272,7 +281,8 @@ def apply_rls(
                         alias,
                         params,
                         dialect,
-                        policy.rls_parameterize,
+                        policy.rls_parameterize and policy.paramstyle is None,
+                        policy.paramstyle is not None,
                     )
                     for param_name in sorted(missing_params):
                         key = ("missing_param", param_name)
@@ -352,7 +362,7 @@ def apply_rls(
                 have_value = rule.param_name in params and params[rule.param_name] is not None
                 value_expr: Any = None
                 if have_value:
-                    value_expr = _convert_value(params[rule.param_name])
+                    value_expr = _convert_value(params[rule.param_name], policy.paramstyle is not None)
                     if value_expr is None:
                         key = ("bad_value", table.display_name, column_norm)
                         if key not in config_reported:
@@ -369,7 +379,7 @@ def apply_rls(
                             )
                         continue
 
-                if not have_value and not policy.rls_parameterize:
+                if not have_value and (not policy.rls_parameterize or policy.paramstyle is not None):
                     missing_key = ("missing_param", rule.param_name)
                     if missing_key not in config_reported:
                         config_reported.add(missing_key)

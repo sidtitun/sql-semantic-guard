@@ -7,6 +7,8 @@ versioning: [SemVer](https://semver.org). Violation `Code` values and
 ## [Unreleased]
 
 ### Added
+- Explicit driver parameter styles (named, pyformat, qmark, numeric), ordered
+  result bindings, bound scalar/list RLS values, and fail-closed parameter errors.
 - Immutable audit records with opt-in SQL capture, inherited role sinks, isolated
   sink failures, and optional OpenTelemetry validation spans and counters.
 - Named `PolicySet` role policies with additive RLS/column/function rules,

@@ -391,6 +391,14 @@ result = guard.validate(sql_from_llm, params=trusted_context, role="support")
 Roles are checked when the guard starts. An unknown role raises `PolicyError`;
 the selected role is included in `result.stats` and `result.to_dict()`.
 
+## Driver parameter binding
+
+Set `Policy(paramstyle="qmark")` (or `named`, `pyformat`, `numeric`) and pass
+named input values to `validate(..., params={...})`. Execute valid results using
+`cursor.execute(result.sql, result.parameters)` when parameters are present.
+Injected RLS values are bound too. The default preserves existing rendering.
+See [driver styles, execution example, and limitations](docs/PARAMETERS.md).
+
 ## Audit and observability
 
 Capture validation decisions without storing raw SQL or parameter values:

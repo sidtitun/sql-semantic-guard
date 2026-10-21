@@ -181,21 +181,22 @@ instrumentation exports completion spans with validation timestamps and bounded
 verdict/code counters. It does not set a current span inside the pipeline.
 See [audit reference](../AUDITING.md) for privacy, sink delivery, and SDK setup.
 
-## 2.6 Driver paramstyle matrix (P2, 2 d)
+## 2.6 Driver paramstyle matrix (P2, implemented)
 
-**Design.** `Policy.paramstyle: "named" | "pyformat" | "qmark" | "numeric" | None`
-(None = dialect default: pyformat for postgres/psycopg, named for athena —
-today's behavior, unchanged). Implemented as a post-render pass over
-`exp.Placeholder` nodes in deterministic tree order; **`qmark`/`numeric`
-require ordered values**, so `ValidationResult` gains
-`parameters: dict[str, Any] | list[Any] | None` — the exact object to pass to
-the driver (`cursor.execute(result.sql, result.parameters)`). In literal mode
-it's `None`. Docs table maps psycopg / asyncpg (numeric) / pyathena (pyformat)
-to settings.
+**Outcome (implemented 2026-10-21).** Explicit `named`, `pyformat`, `qmark`,
+and `numeric` styles return `ValidationResult.parameters`. Bindings follow
+emitted SQL order, repeat values for repeated placeholders, and include injected
+scalar/list RLS values. Missing bindings fail closed even in shadow mode.
+`None` preserves legacy rendering and unbound-placeholder behavior.
 
-**Tests:** each style renders + parameters object matches positions; repeated
-placeholder (same param twice) duplicates values correctly in ordered styles;
-round-trip against sqlite3 (qmark) in-suite as a real-driver smoke test.
+**Plan corrections:** numeric follows PEP 249 (`:1`), not asyncpg (`$1`). Input
+uses named placeholders. Parameters are excluded from default serialization.
+The dialect safety audit precedes controlled driver marker rendering; estimators
+retain their existing SQL/AST interface. See [driver reference](../PARAMETERS.md).
+
+**Tests:** each style, CTE ordering, repeated names, hostile strings, percent
+escaping, role RLS, list expansion, missing binding/shadow failures, legacy
+defaults, and real sqlite3 execution with qmark/named bindings.
 
 ## 2.7 Shadow mode (P1, 1 d — ship first)
 

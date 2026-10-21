@@ -26,6 +26,7 @@ from sqlguard import analyzer, cost, rewrite, rls, semantics
 from sqlguard.audit import AuditRecord
 from sqlguard.catalog import Catalog, CatalogIndex, match_table
 from sqlguard.errors import PolicyError, ValidationFailed
+from sqlguard.parameters import ParameterError, render_parameters
 from sqlguard.policy import ColumnRule, Policy, PolicySet
 from sqlguard.scopeindex import ScopeIndex
 from sqlguard.violations import (
@@ -51,6 +52,7 @@ _DIALECT_ALIASES = {
 # Policy(enforcement="log_only") shadow mode.
 _HARD_STOP_CODES = frozenset(
     {
+        Code.PARAMETER_ERROR,
         Code.PARSE_ERROR,
         Code.MULTIPLE_STATEMENTS,
         Code.DISALLOWED_STATEMENT,
@@ -265,6 +267,7 @@ class SQLGuard:
         stats = QueryStats(role=role)
         run, skipped = stats.checks_run, stats.checks_skipped
         audited_sql: str | None = None
+        bound_parameters: dict[str, Any] | list[Any] | None = None
         all_checks = [
             "statement_gate",
             "complexity_checks",
@@ -313,6 +316,7 @@ class SQLGuard:
                 rewrites=rewrites,
                 stats=stats,
                 would_block=would_block,
+                parameters=bound_parameters if out_sql is not None else None,
             )
 
         # 1. parse ---------------------------------------------------------
@@ -457,6 +461,10 @@ class SQLGuard:
         )
         violations.extend(rls_violations)
         rewrites.extend(rls_rewrites)
+        if policy.paramstyle is not None and any(v.is_error for v in rls_violations):
+            # Explicit driver mode requires complete, trusted tenant bindings,
+            # even when measuring other policy violations in shadow mode.
+            return finalize(None)
 
         # 9. limit enforcement ---------------------------------------------------
         run.append("limit_enforcement")
@@ -504,6 +512,14 @@ class SQLGuard:
             )
             return finalize(None)
         audited_sql = rendered
+        if policy.paramstyle is not None:
+            try:
+                audited_sql, bound_parameters = render_parameters(
+                    tree, dialect, policy.paramstyle, params, policy.pretty_sql
+                )
+            except ParameterError as exc:
+                violations.append(Violation(Code.PARAMETER_ERROR, Severity.ERROR, str(exc)))
+                return finalize(None)
 
         # 13. cost estimation ---------------------------------------------------
         run.append("cost_estimation")

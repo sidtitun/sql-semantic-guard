@@ -485,12 +485,17 @@ class Policy:
     audit_sink: Callable[[AuditRecord], None] | None = None
     audit_include_sql: bool = False
 
+    # Explicit driver binding; None preserves legacy rendering.
+    paramstyle: str | None = None
+
     # Output
     pretty_sql: bool = False
 
     def __post_init__(self) -> None:
         if self.audit_sink is not None and not callable(self.audit_sink):
             raise PolicyError("audit_sink must be callable or None")
+        if self.paramstyle not in (None, "named", "pyformat", "qmark", "numeric"):
+            raise PolicyError("paramstyle must be named, pyformat, qmark, numeric, or None")
         for s in self.allowed_statements:
             if s.lower() != "select":
                 raise PolicyError(

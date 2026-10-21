@@ -57,7 +57,7 @@ test plans, risks) under [plans/](plans/README.md).
 | 2.3 | **Role-based policy sets** — named roles mapping to (column rules, RLS, budgets); `guard.validate(sql, role="analyst", params=…)`; policy composition/inheritance | P1 | 4 d | Same guard object serves `analyst` and `support` with different visibility, tested |
 | 2.4 | **Complexity budgets** — max joins, max subquery/CTE depth, max UNION branches, expression-node ceiling (planner-abuse and prompt-injection blast-radius control) | P1 | 2 d | A 40-join generated monster is rejected with `complexity_exceeded` |
 | 2.5 | **Audit & observability hooks** — structured audit record per validation (who/what/verdict/violations), pluggable sink, OpenTelemetry spans + counters by violation code | P1 | 3 d | Compliance can reconstruct every allow/deny decision from the audit stream |
-| 2.6 | **Driver paramstyle matrix** — placeholder rendering for `qmark`/`numeric`/`named`/`pyformat` chosen per policy, documented per driver (psycopg, pyathena, etc.) | P2 | 2 d | Parameterized mode works out-of-the-box with the 4 major paramstyles |
+| 2.6 | **Driver paramstyle matrix (implemented)** — placeholder rendering for `qmark`/`numeric`/`named`/`pyformat` chosen per policy, documented per driver (psycopg, pyathena, etc.) | P2 | 2 d | Parameterized mode works out-of-the-box with the 4 major paramstyles |
 | 2.7 | **Shadow mode** — `enforcement="log_only"` policy switch for safe production rollout: everything evaluated and audited, nothing blocked | P1 | 1 d | A deployment can measure would-be-block rate before enforcing |
 
 ## Phase 3 — Cost intelligence & engine coverage

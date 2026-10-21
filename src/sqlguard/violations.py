@@ -24,6 +24,7 @@ class Code(str, Enum):
     """Machine-readable violation codes (stable across releases)."""
 
     # Parsing / statement shape
+    PARAMETER_ERROR = "parameter_error"
     PARSE_ERROR = "parse_error"
     MULTIPLE_STATEMENTS = "multiple_statements"
     DISALLOWED_STATEMENT = "disallowed_statement"
@@ -227,6 +228,8 @@ class ValidationResult:
     # that case; use this flag to measure shadow-mode block rates.
     would_block: bool = False
 
+    parameters: dict[str, Any] | list[Any] | None = None
+
     # -- convenience -------------------------------------------------------
 
     @property
@@ -248,8 +251,8 @@ class ValidationResult:
     def __bool__(self) -> bool:
         return self.valid
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
+    def to_dict(self, *, include_parameters: bool = False) -> dict[str, Any]:
+        result = {
             "valid": self.valid,
             "would_block": self.would_block,
             "sql": self.sql,
@@ -259,6 +262,10 @@ class ValidationResult:
             "rewrites": [r.to_dict() for r in self.rewrites],
             "stats": self.stats.to_dict(),
         }
+
+        if include_parameters:
+            result["parameters"] = self.parameters
+        return result
 
     def feedback(self, include_rewrites: bool = True) -> str:
         """Render a compact, deterministic repair prompt for an LLM.

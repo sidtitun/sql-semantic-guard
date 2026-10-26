@@ -30,10 +30,12 @@ from sqlguard.catalog import Catalog, Column, ForeignKey, Table
 from sqlguard.cost import CostEstimator, EstimateInputs, HeuristicCostEstimator
 from sqlguard.errors import CatalogError, PolicyError, SQLGuardError, ValidationFailed
 from sqlguard.guard import SQLGuard
+from sqlguard.intent import DimensionIntent, FilterIntent, MeasureIntent, OrderIntent, QueryIntent
 from sqlguard.policy import ColumnRule, Policy, PolicyOverlay, PolicySet, RLSRule
 from sqlguard.violations import (
     Code,
     CostEstimate,
+    IntentCheckResult,
     QueryStats,
     Rewrite,
     RewriteKind,
@@ -47,6 +49,12 @@ __version__ = "0.2.0"
 
 __all__ = [
     "SQLGuard",
+    "QueryIntent",
+    "MeasureIntent",
+    "DimensionIntent",
+    "FilterIntent",
+    "OrderIntent",
+    "IntentCheckResult",
     "AuditRecord",
     "Catalog",
     "Table",

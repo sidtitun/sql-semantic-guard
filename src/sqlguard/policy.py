@@ -272,6 +272,7 @@ class PolicyOverlay:
     check_joins: bool | None = None
     strict_joins: bool | None = None
     require_declared_join_paths: bool | None = None
+    intent_enforcement: str | None = None
     enforcement: str | None = None
 
     def __post_init__(self) -> None:
@@ -316,6 +317,8 @@ class PolicyOverlay:
                 raise PolicyError(f"role overlays may only enable {name}")
         if self.enforcement not in (None, "block"):
             raise PolicyError("role overlays may only tighten enforcement to 'block'")
+        if self.intent_enforcement not in (None, "warn", "block"):
+            raise PolicyError("role overlay intent_enforcement must be warn, block, or None")
 
 
 def _restricted_limit(base: int | None, overlay: int | None, name: str) -> int | None:
@@ -325,6 +328,19 @@ def _restricted_limit(base: int | None, overlay: int | None, name: str) -> int |
     if base is not None and overlay > base:
         raise PolicyError(
             f"role overlay {name}={overlay} would loosen base policy {name}={base}"
+        )
+    return overlay
+
+
+def _restricted_intent_enforcement(base: str, overlay: str | None) -> str:
+    """Merge intent enforcement while rejecting a role that would weaken it."""
+    if overlay is None:
+        return base
+    rank = {"off": 0, "warn": 1, "block": 2}
+    if rank[overlay] < rank[base]:
+        raise PolicyError(
+            "role overlay intent_enforcement="
+            f"{overlay!r} would loosen base policy intent_enforcement={base!r}"
         )
     return overlay
 
@@ -416,6 +432,9 @@ class PolicySet:
             require_declared_join_paths=(
                 base.require_declared_join_paths or bool(overlay.require_declared_join_paths)
             ),
+            intent_enforcement=_restricted_intent_enforcement(
+                base.intent_enforcement, overlay.intent_enforcement
+            ),
             enforcement="block" if overlay.enforcement == "block" else base.enforcement,
         )
 
@@ -471,6 +490,7 @@ class Policy:
     check_joins: bool = True
     strict_joins: bool = False  # escalate join heuristics to errors
     require_declared_join_paths: bool = False
+    intent_enforcement: str = "off"  # off | warn | block
 
     # Enforcement. "block" (default) fails validation on any ERROR.
     # "log_only" (shadow mode) keeps semantic/policy errors as recorded
@@ -504,6 +524,8 @@ class Policy:
                 )
         if self.enforcement not in ("block", "log_only"):
             raise PolicyError("enforcement must be 'block' or 'log_only'")
+        if self.intent_enforcement not in ("off", "warn", "block"):
+            raise PolicyError("intent_enforcement must be 'off', 'warn', or 'block'")
         if self.rls_strategy not in _VALID_RLS_STRATEGIES:
             raise PolicyError(f"rls_strategy must be one of {_VALID_RLS_STRATEGIES}")
         if self.on_conflicting_tenant_filter not in _VALID_CONFLICT_MODES:

@@ -26,6 +26,7 @@ from sqlguard import analyzer, cost, rewrite, rls, semantics
 from sqlguard.audit import AuditRecord
 from sqlguard.catalog import Catalog, CatalogIndex, match_table
 from sqlguard.errors import PolicyError, ValidationFailed
+from sqlguard.intent import QueryIntent, check_query_intent
 from sqlguard.parameters import ParameterError, render_parameters
 from sqlguard.policy import ColumnRule, Policy, PolicySet
 from sqlguard.scopeindex import ScopeIndex
@@ -171,7 +172,12 @@ class SQLGuard:
     # ------------------------------------------------------------------ #
 
     def validate(
-        self, sql: str, params: Mapping[str, Any] | None = None, *, role: str | None = None
+        self,
+        sql: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        role: str | None = None,
+        intent: QueryIntent | None = None,
     ) -> ValidationResult:
         """Validate one statement. Never raises for problems *in the SQL*."""
         # Snapshot observers at entry; configure instrumentation at startup.
@@ -189,7 +195,7 @@ class SQLGuard:
                 error_type = "PolicyError"
                 raise
             try:
-                result = self._validate(sql, dict(params or {}), policy, role)
+                result = self._validate(sql, dict(params or {}), policy, role, intent)
             except Exception as e:  # safety net: never expose exception contents
                 error_type = type(e).__name__
                 logger.error("sqlguard internal error while validating (%s)", error_type)
@@ -241,10 +247,15 @@ class SQLGuard:
                     logger.warning("sqlguard audit record could not be constructed")
 
     def validate_or_raise(
-        self, sql: str, params: Mapping[str, Any] | None = None, *, role: str | None = None
+        self,
+        sql: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        role: str | None = None,
+        intent: QueryIntent | None = None,
     ) -> ValidationResult:
         """Like :meth:`validate`, raising :class:`ValidationFailed` on errors."""
-        result = self.validate(sql, params, role=role)
+        result = self.validate(sql, params, role=role, intent=intent)
         if not result.valid:
             raise ValidationFailed(result)
         return result
@@ -259,7 +270,12 @@ class SQLGuard:
         return self.policy_set.resolve(role)
 
     def _validate(
-        self, sql: str, params: dict[str, Any], policy: Policy, role: str | None
+        self,
+        sql: str,
+        params: dict[str, Any],
+        policy: Policy,
+        role: str | None,
+        intent: QueryIntent | None,
     ) -> ValidationResult:
         dialect, index = self.dialect, self.index
         violations: list[Violation] = []
@@ -284,6 +300,7 @@ class SQLGuard:
             "limit_enforcement",
             "join_checks",
             "partition_filters",
+            "intent_checks",
             "cost_estimation",
             "output_audit",
         ]
@@ -489,6 +506,16 @@ class SQLGuard:
             tree, index, policy, dialect, scope_index=scope_index
         )
         violations.extend(part_violations)
+
+        # 11b. independent intent contract ------------------------------------
+        if intent is not None and policy.intent_enforcement != "off":
+            run.append("intent_checks")
+            stats.intent, intent_violations = check_query_intent(
+                tree, intent, index, params, policy.intent_enforcement
+            )
+            violations.extend(intent_violations)
+        else:
+            skipped.append("intent_checks")
 
         # 12. final output audit -------------------------------------------------
         # Render once, then independently parse and gate the exact SQL that will

@@ -46,6 +46,9 @@ class Code(str, Enum):
     GROUP_BY_VIOLATION = "group_by_violation"
     AGGREGATE_IN_WHERE = "aggregate_in_where"
     UNKNOWN_VALUE = "unknown_value"
+    INTENT_CONSTRAINT_MISSING = "intent_constraint_missing"
+    INTENT_CONSTRAINT_CONFLICT = "intent_constraint_conflict"
+    INTENT_UNDECIDABLE = "intent_undecidable"
 
     # Column-level policy
     COLUMN_DENIED = "column_denied"
@@ -183,6 +186,31 @@ class CostEstimate:
 
 
 @dataclass
+class IntentCheckResult:
+    """Privacy-safe comparison of an independent intent with the final SQL."""
+
+    confirmed: list[str] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+    conflicting: list[str] = field(default_factory=list)
+    undecidable: list[str] = field(default_factory=list)
+    observed: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def matched(self) -> bool:
+        return not self.missing and not self.conflicting and not self.undecidable
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "matched": self.matched,
+            "confirmed": list(self.confirmed),
+            "missing": list(self.missing),
+            "conflicting": list(self.conflicting),
+            "undecidable": list(self.undecidable),
+            "observed": dict(self.observed),
+        }
+
+
+@dataclass
 class QueryStats:
     """Metadata gathered while validating (independent of pass/fail)."""
 
@@ -192,6 +220,7 @@ class QueryStats:
     referenced_columns: dict[str, list[str]] = field(default_factory=dict)
     cost: CostEstimate | None = None
     complexity: dict[str, int] = field(default_factory=dict)
+    intent: IntentCheckResult | None = None
     checks_run: list[str] = field(default_factory=list)
     checks_skipped: list[str] = field(default_factory=list)
 
@@ -203,6 +232,7 @@ class QueryStats:
             "referenced_columns": {k: list(v) for k, v in self.referenced_columns.items()},
             "cost": self.cost.to_dict() if self.cost else None,
             "complexity": dict(self.complexity),
+            "intent": self.intent.to_dict() if self.intent else None,
             "checks_run": list(self.checks_run),
             "checks_skipped": list(self.checks_skipped),
         }

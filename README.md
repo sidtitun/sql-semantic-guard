@@ -21,6 +21,9 @@ plus your live schema catalog and, *before anything touches the database*:
    restricted columns, and adds/clamps `LIMIT`.
 6. **Returns a structured, LLM-ready violation report** so the model can
    self-repair.
+7. **Checks the SQL against an independent query intent** — required measures,
+   dimensions, filters, grain, ordering, distinctness, and limit can be verified
+   after safe rewrites, before execution.
 
 Everything is composable, dependency-light (just [`sqlglot`](https://github.com/tobymao/sqlglot)),
 and fails **closed**: an invalid result never carries executable SQL.
@@ -66,6 +69,7 @@ library.
 | Missing or spoofed tenant filter | Cross-tenant data exposure | RLS is verified or injected at every table reference |
 | `SELECT *` includes PII | Sensitive-data leakage | Stars expand and restricted columns are denied, removed, or masked |
 | Wrong join path or ambiguous reference | Plausible but incorrect answer | Relationship and scope checks report the error |
+| Valid SQL answers a different question | Silent semantic error | Optional typed intent checks compare the final SQL with a trusted result contract |
 | Unbounded or partition-free query | High latency and warehouse cost | Limits, complexity budgets, partition rules, and scan budgets stop it |
 | Invalid query returned as a plain exception | Weak LLM repair loop | Stable codes and `feedback()` provide actionable correction context |
 
@@ -205,6 +209,42 @@ else:
 `guard.policy_prompt()` supplies the known schema and active rules to the
 model, reducing avoidable failures before the repair loop starts.
 
+### Verify that SQL answers the intended question
+
+Schema validation cannot detect every plausible-but-wrong query. When your
+application has independently resolved the user's request into structured
+fields, pass a `QueryIntent` and enable `warn` or `block` enforcement:
+
+```python
+from sqlguard import (
+    DimensionIntent, FilterIntent, MeasureIntent, OrderIntent, QueryIntent,
+)
+
+policy = Policy(intent_enforcement="block")
+guard = SQLGuard(catalog, policy, dialect="postgres")
+
+intent = QueryIntent(
+    measures=[MeasureIntent("sum", "amount", alias="revenue")],
+    dimensions=[DimensionIntent("created_at", alias="month", time_grain="month")],
+    filters=[FilterIntent("status", values=("paid",))],
+    ordering=[OrderIntent("revenue", "desc")],
+    limit=5,
+    expected_grain=["month"],
+)
+
+result = guard.validate(
+    generated_sql,
+    params={"status": "paid"},
+    intent=intent,
+)
+```
+
+Build the intent from a trusted application workflow or an independently
+validated planning step—not from the same SQL being checked. Intent enforcement
+is off by default for backward compatibility. See
+[Query intent validation](docs/INTENT_VALIDATION.md) for the contract and
+deployment guidance.
+
 ### Minimal API-service pattern
 
 Keep validation in the trusted backend, immediately before execution:
@@ -258,6 +298,7 @@ SELECT statement is allowed.
 | Semantic binding | `SELECT amont FROM orderz`; `SELECT customer_id FROM a JOIN b …` (ambiguous); `WHERE alias_from_select > 1` | `unknown_table`, `unknown_column`, `ambiguous_column`, `alias_misuse` |
 | Type checks | `WHERE amount = 'expensive'`; `WHERE created_at > 'last tuesday'` | `type_mismatch` |
 | Aggregation checks | `SELECT status, SUM(amount) FROM orders`; `WHERE SUM(amount) > 10` | `group_by_violation`, `aggregate_in_where` |
+| Query intent | Missing requested filter; `AVG(amount)` when `SUM(amount)` was requested; wrong time grain/order/limit | `intent_constraint_missing`, `intent_constraint_conflict`, `intent_undecidable` |
 | Domain checks | `WHERE status = 'shiped'` when the catalog allows `shipped` | `unknown_value` |
 | Nested/derived binding | `payload.refferer`; `SELECT sub.bogus FROM (SELECT * FROM orders) sub` | `unknown_column` |
 | Relationship checks | `orders.id = customers.id` when the declared FK is `orders.customer_id = customers.id` | `invalid_join_path` |

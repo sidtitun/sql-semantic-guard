@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sidtitun/sql-semantic-guard/evals/semantic/schema-v1.json",
+  "title": "SQL Semantic Guard semantic evaluation corpus v1",
+  "type": "object",
+  "required": ["schema_version", "corpus_id", "oracle", "cases"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "corpus_id": {"type": "string", "minLength": 1},
+    "oracle": {
+      "type": "object",
+      "required": ["id", "revision", "adjudication_source"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "minLength": 1},
+        "adjudication_source": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["case_id", "question", "answerability", "adjudication"],
+        "properties": {
+          "case_id": {"type": "string", "minLength": 1},
+          "question": {"type": "string", "minLength": 1},
+          "answerability": {"enum": ["answerable", "ambiguous", "unanswerable"]},
+          "adjudication": {
+            "type": "object",
+            "required": ["status", "reviewer_count", "rationale", "source"],
+            "properties": {
+              "status": {"enum": ["accepted", "disputed", "excluded"]},
+              "reviewer_count": {"type": "integer", "minimum": 1},
+              "rationale": {"type": "string", "minLength": 1},
+              "source": {"type": "string", "minLength": 1}
+            }
+          },
+          "intent": {"type": "object"},
+          "params": {"type": "object"},
+          "accepted_sql": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "mutations": {"type": "array", "items": {"type": "object"}},
+          "ambiguities": {"type": "array", "items": {"type": "object"}},
+          "execution_oracle": {"type": "object"}
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

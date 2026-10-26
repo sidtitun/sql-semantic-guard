@@ -1,4 +1,4 @@
-# SQLGuard evaluation corpus
+# SQLGuard evaluation corpora
 
 Run the frozen behavior gate after installing the package:
 
@@ -25,3 +25,26 @@ false-block rate <=2%, unsafe-query rejection =100%, and rewrite idempotence
 >=95%. These are release acceptance targets for this corpus, not claims about
 production traffic; deployments should add a privacy-reviewed representative
 corpus before relying on those rates as operational estimates.
+
+## Semantic evaluation foundation
+
+`semantic/corpus-v1.json` is the versioned, adjudicated smoke corpus for the
+independent `QueryIntent` contract. It includes accepted SQL variants,
+deterministic semantic mutations, ambiguity/unanswerable labels, retained
+disputed cases, and counterfactual database instances. The oracle identity and
+revision are emitted in every report.
+
+```sh
+python -m evals.semantic_run
+```
+
+The semantic runner reports accepted-query recall, mutation recall by class,
+known product gaps, and execution agreement under ordered, set, and
+multiplicity-preserving multiset comparators. Set equality is never treated as
+proof of multiset equality. Counterfactual fixtures expose SQL that happens to
+agree on the first database but diverges when duplicates or join fan-out are
+introduced.
+
+The initial public smoke set is intentionally small. Phase 6.5 exits only after
+the corpus reaches the case, ambiguity, and multi-instance targets in the
+[semantic reliability plan](../docs/plans/phase-6-semantic-reliability.md).

@@ -59,3 +59,27 @@ prevents us from designing intent checks around hand-picked examples. Then add
 metric/grain semantics (6.2), clarification contracts (6.3), fingerprints
 (6.7), bounded probes (6.4), and finally multi-turn integration (6.6).
 
+## Post-6.1 evaluation addendum
+
+The review after typed intent validation added three requirements to 6.5:
+
+- **Version the oracle, not only the corpus.** Recent oracle-comparison work
+  shows that shipped databases, generated multi-instance suites, and expert
+  judgments can disagree in both directions. Reports must name the database
+  suite, comparator, accepted references, and adjudication source, and sample
+  both accepted and rejected outcomes for review.
+- **Preserve multiplicity.** Set-based execution scoring can hide missing
+  `DISTINCT`, duplicate inflation, and fan-out. The evaluator records ordered,
+  set, and multiset equivalence separately and never treats a set match as proof
+  of bag-equivalent SQL.
+- **Separate groundedness from execution.** Ambiguity benchmarks distinguish
+  correct-but-ungrounded answers from grounded success and silent failure.
+  Corpus cases therefore track ambiguity lifecycle and coverage independently
+  from final SQL correctness, preparing the contract for 6.3 and 6.6.
+
+Design signals: *Certified Against Which Oracle?* (arXiv:2609.25938),
+*ModularSQL* (arXiv:2609.29573), *Beyond Correctness: Resolving
+Underspecification in Agentic Text-to-SQL* (arXiv:2610.02739), and *TIDE-Bench*
+(arXiv:2608.29543). These are recent preprints; their concrete thresholds are
+not adopted as universal production gates.
+

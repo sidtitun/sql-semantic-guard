@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "corpus_id": "sqlguard-semantic-smoke-v1",
+  "oracle": {
+    "id": "adjudicated-intent-and-counterfactual-v1",
+    "revision": "2026-10-26",
+    "adjudication_source": "maintainer-reviewed synthetic cases"
+  },
+  "cases": [
+    {
+      "case_id": "intent-missing-filter-001",
+      "question": "List paid order IDs.",
+      "answerability": "answerable",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Paid is an explicit status constraint.", "source": "synthetic-v1"},
+      "intent": {"dimensions": [{"column": "id", "table": "orders"}], "filters": [{"column": "status", "table": "orders", "operator": "eq", "values": ["paid"]}]},
+      "params": {"status": "paid"},
+      "accepted_sql": ["SELECT id FROM orders WHERE status = :status"],
+      "mutations": [{"mutation_id": "drop-status", "class": "missing_filter", "sql": "SELECT id FROM orders", "expected_guard": "blocked", "expected_codes": ["intent_constraint_missing"]}]
+    },
+    {
+      "case_id": "intent-filter-value-002",
+      "question": "List paid order IDs.",
+      "answerability": "answerable",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Changing the status changes the requested population.", "source": "synthetic-v1"},
+      "intent": {"dimensions": [{"column": "id", "table": "orders"}], "filters": [{"column": "status", "table": "orders", "operator": "eq", "values": ["paid"]}]},
+      "accepted_sql": ["SELECT id FROM orders WHERE status = 'paid'"],
+      "mutations": [{"mutation_id": "swap-status", "class": "swapped_filter", "sql": "SELECT id FROM orders WHERE status = 'pending'", "expected_guard": "blocked", "expected_codes": ["intent_constraint_conflict"]}]
+    },
+    {
+      "case_id": "intent-aggregation-003",
+      "question": "What is total order revenue?",
+      "answerability": "answerable",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Total revenue requires SUM rather than AVG.", "source": "synthetic-v1"},
+      "intent": {"measures": [{"aggregation": "sum", "column": "amount", "table": "orders", "alias": "revenue"}]},
+      "accepted_sql": ["SELECT SUM(amount) AS revenue FROM orders"],
+      "mutations": [{"mutation_id": "sum-to-average", "class": "wrong_aggregation", "sql": "SELECT AVG(amount) AS revenue FROM orders", "expected_guard": "blocked", "expected_codes": ["intent_constraint_conflict"]}]
+    },
+    {
+      "case_id": "intent-time-grain-004",
+      "question": "Show monthly order revenue.",
+      "answerability": "answerable",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Monthly and weekly buckets answer different questions.", "source": "synthetic-v1"},
+      "intent": {"measures": [{"aggregation": "sum", "column": "amount", "alias": "revenue"}], "dimensions": [{"column": "created_at", "alias": "month", "time_grain": "month"}], "expected_grain": ["month"]},
+      "accepted_sql": ["SELECT DATE_TRUNC('month', created_at) AS month, SUM(amount) AS revenue FROM orders GROUP BY 1"],
+      "mutations": [{"mutation_id": "month-to-week", "class": "wrong_time_grain", "sql": "SELECT DATE_TRUNC('week', created_at) AS month, SUM(amount) AS revenue FROM orders GROUP BY 1", "expected_guard": "blocked", "expected_codes": ["intent_constraint_conflict"]}]
+    },
+    {
+      "case_id": "intent-distinct-005",
+      "question": "Which order statuses occur? Return each status once.",
+      "answerability": "answerable",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "The question explicitly requires unique statuses.", "source": "synthetic-v1"},
+      "intent": {"dimensions": [{"column": "status", "table": "orders"}], "distinct": true},
+      "accepted_sql": ["SELECT DISTINCT status FROM orders"],
+      "execution_oracle": {"comparators": ["set", "multiset"], "instance_ids": ["orders-one-to-one-v1", "orders-duplicates-and-fanout-v1"]},
+      "mutations": [{"mutation_id": "remove-distinct", "class": "missing_distinct", "sql": "SELECT status FROM orders", "expected_guard": "blocked", "expected_codes": ["intent_constraint_conflict"]}]
+    },
+    {
+      "case_id": "intent-top-k-006",
+      "question": "Return the two statuses with the highest revenue.",
+      "answerability": "answerable",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Top revenue requires descending measure order and limit two.", "source": "synthetic-v1"},
+      "intent": {"measures": [{"aggregation": "sum", "column": "amount", "alias": "revenue"}], "dimensions": [{"column": "status"}], "ordering": [{"field": "revenue", "direction": "desc"}], "limit": 2, "expected_grain": ["status"]},
+      "accepted_sql": ["SELECT status, SUM(amount) AS revenue FROM orders GROUP BY status ORDER BY revenue DESC LIMIT 2"],
+      "execution_oracle": {"comparators": ["ordered", "multiset"], "instance_ids": ["orders-one-to-one-v1", "orders-duplicates-and-fanout-v1"]},
+      "mutations": [{"mutation_id": "reverse-rank", "class": "wrong_top_k_order", "sql": "SELECT status, SUM(amount) AS revenue FROM orders GROUP BY status ORDER BY revenue ASC LIMIT 2", "expected_guard": "blocked", "expected_codes": ["intent_constraint_conflict"]}, {"mutation_id": "expand-top-k", "class": "wrong_limit", "sql": "SELECT status, SUM(amount) AS revenue FROM orders GROUP BY status ORDER BY revenue DESC LIMIT 5", "expected_guard": "blocked", "expected_codes": ["intent_constraint_conflict"]}]
+    },
+    {
+      "case_id": "intent-grouping-007",
+      "question": "Show revenue by status.",
+      "answerability": "answerable",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Status is the required output grain.", "source": "synthetic-v1"},
+      "intent": {"measures": [{"aggregation": "sum", "column": "amount", "alias": "revenue"}], "dimensions": [{"column": "status"}], "expected_grain": ["status"]},
+      "accepted_sql": ["SELECT status, SUM(amount) AS revenue FROM orders GROUP BY status"],
+      "mutations": [{"mutation_id": "drop-group-by", "class": "missing_group_dimension", "sql": "SELECT status, SUM(amount) AS revenue FROM orders", "expected_guard": "blocked", "expected_codes": ["intent_constraint_conflict"]}]
+    },
+    {
+      "case_id": "intent-count-distinct-008",
+      "question": "How many distinct customers placed orders?",
+      "answerability": "answerable",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Repeated orders from one customer must count once.", "source": "synthetic-v1"},
+      "intent": {"measures": [{"aggregation": "count", "column": "customer_id", "alias": "customers", "distinct": true}]},
+      "accepted_sql": ["SELECT COUNT(DISTINCT customer_id) AS customers FROM orders"],
+      "mutations": [{"mutation_id": "remove-count-distinct", "class": "missing_distinct", "sql": "SELECT COUNT(customer_id) AS customers FROM orders", "expected_guard": "blocked", "expected_codes": ["intent_constraint_conflict"]}]
+    },
+    {
+      "case_id": "known-gap-fanout-009",
+      "question": "What is total order revenue?",
+      "answerability": "answerable",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Joining line items before summing order amounts duplicates order-grain measures.", "source": "synthetic-v1"},
+      "intent": {"measures": [{"aggregation": "sum", "column": "amount", "table": "orders", "alias": "revenue"}]},
+      "accepted_sql": ["SELECT SUM(amount) AS revenue FROM orders"],
+      "execution_oracle": {"comparators": ["set", "multiset"], "instance_ids": ["orders-one-to-one-v1", "orders-duplicates-and-fanout-v1"]},
+      "mutations": [{"mutation_id": "join-fanout", "class": "fanout", "sql": "SELECT SUM(o.amount) AS revenue FROM orders AS o JOIN line_items AS li ON li.order_id = o.id", "expected_guard": "known_gap", "expected_codes": []}]
+    },
+    {
+      "case_id": "ambiguity-metric-010",
+      "question": "Show revenue by month.",
+      "answerability": "ambiguous",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Gross and net revenue are both governed metrics with different results.", "source": "synthetic-v1"},
+      "ambiguities": [{"issue_id": "metric-definition", "kind": "ambiguous_metric", "prompt": "Should revenue mean gross or net revenue?", "choices": ["gross_revenue", "net_revenue"], "required": true, "lifecycle": "planned"}]
+    },
+    {
+      "case_id": "ambiguity-time-011",
+      "question": "Show recent orders.",
+      "answerability": "ambiguous",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Recent has no stable time boundary without clarification.", "source": "synthetic-v1"},
+      "ambiguities": [{"issue_id": "recent-window", "kind": "missing_time_scope", "prompt": "What time window should recent mean?", "choices": ["7_days", "30_days", "90_days"], "required": true, "lifecycle": "planned"}]
+    },
+    {
+      "case_id": "unanswerable-entity-012",
+      "question": "Show shipment carrier performance.",
+      "answerability": "unanswerable",
+      "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "The catalog contains no carrier or shipment performance data.", "source": "synthetic-v1"},
+      "ambiguities": [{"issue_id": "missing-carrier-data", "kind": "out_of_domain", "prompt": "Carrier performance is unavailable in this catalog.", "choices": [], "required": true, "lifecycle": "planned"}]
+    },
+    {
+      "case_id": "disputed-reference-013",
+      "question": "Show our best customers.",
+      "answerability": "ambiguous",
+      "adjudication": {"status": "disputed", "reviewer_count": 2, "rationale": "Reviewers disagree whether best means revenue, order count, or recency; retained rather than deleted.", "source": "synthetic-v1"},
+      "ambiguities": [{"issue_id": "best-customer", "kind": "ambiguous_metric", "prompt": "How should best customer be measured?", "choices": ["revenue", "order_count", "recency"], "required": true, "lifecycle": "planned"}]
+    }
+  ]
+}

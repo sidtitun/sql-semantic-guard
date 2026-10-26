@@ -7,6 +7,9 @@ versioning: [SemVer](https://semver.org). Violation `Code` values and
 ## [Unreleased]
 
 ### Added
+- Versioned semantic evaluation schema and smoke corpus with adjudication
+  metadata, intent mutations, ambiguity labels, counterfactual database
+  instances, explicit oracle identity, and set/multiset result comparison.
 - Optional typed `QueryIntent` validation for measures, dimensions, filters,
   output grain, ordering, `DISTINCT`, and exact limits, with privacy-safe
   diagnostics and `off`/`warn`/`block` rollout modes.

@@ -184,14 +184,35 @@ precision/coverage; repair success and repair regression; repeated-run solid
 success and at-least-once success for integrations. Never collapse parse,
 runtime, policy, intent, refusal, and wrong-result failures into one score.
 
+Report result equivalence under explicit comparator semantics: ordered rows,
+sets, and multiplicity-preserving multisets. A set match must never imply a
+multiset match; duplicate inflation, missing `DISTINCT`, and fan-out are tracked
+as their own failure slice.
+
 **Governance.** New/changed labels require rationale and review. Track excluded
 or disputed cases instead of deleting them. Report results under both accepted
 SQL and multi-instance execution oracles. Keep private production cases outside
 the repository but run the same schema and evaluator.
 
-**Acceptance.** At least 100 public, license-compatible cases covering every
-intent facet and mutation class; ≥25 ambiguous/unanswerable cases; ≥20
-multi-instance counterfactual cases; deterministic evaluator and CI smoke set.
+Every report names and versions its oracle: corpus revision, database-instance
+suite, comparator, accepted SQL variants, and adjudication source. Automated
+execution disagreements are review triggers, not automatic semantic truth.
+Audit samples from both oracle-accepted and oracle-rejected predictions so false
+acceptance and false rejection remain measurable. Keep reference defects,
+underspecified questions, unrealistic instances, comparator errors, and model
+errors as separate outcomes.
+
+For ambiguity cases, record planned, asked, answered, and explicitly dropped
+issues. Report execution accuracy, ambiguity recall, grounded success,
+correct-but-ungrounded success, silent failure, and clarification cost
+separately. Later multi-turn cases pair additive elaboration with explicit
+supersession/intent-drift cases over the same anchor question.
+
+**Acceptance.** Land a versioned schema and deterministic CI smoke set first.
+Before the phase exits: at least 100 public, license-compatible cases covering
+every intent facet and mutation class; ≥25 ambiguous/unanswerable cases; ≥20
+multi-instance counterfactual cases; both set and multiset comparisons; and an
+adjudicated audit sample drawn from both accepted and rejected oracle outcomes.
 Do not publish a general Text-to-SQL accuracy claim from this corpus.
 
 ## 6.6 Caller-owned resolved-turn context (P2, 2 d)

@@ -71,7 +71,7 @@ test plans, risks) under [plans/](plans/README.md).
 | 3.2 | **Postgres statistics selectivity** — `pg_stats` histograms/ndistinct for predicate selectivity; flag guaranteed seq-scans on large tables (no usable index for the predicate) | P2 | 5 d | Estimate error ≤10× on the TPC-H-lite test set (vs unbounded today) |
 | 3.3 | **Trino/Athena EXPLAIN gate** — parse Athena `EXPLAIN (FORMAT JSON)` for a second opinion when a live connection is available | P2 | 3 d | Optional estimator mirrors `PostgresExplainEstimator` for Athena |
 | 3.4 | **Dialect packs: Snowflake, BigQuery, Redshift, Databricks** — per-dialect defaults (function denylist, columnar flag, partition semantics incl. BigQuery `_PARTITIONTIME`/clustering), each with its own test file like `test_athena.py` | P1 | 4 d each | Full suite parity per dialect; README support matrix updated |
-| 3.5 | **dbt manifest importer** — `Catalog.from_dbt_manifest("manifest.json")`: schemas, docs, tags (PII!), relationships from dbt tests (`relationships`, `accepted_values` → FK graph + enums) | P0 | 3 d | A dbt project's guardrails configure themselves from artifacts it already has |
+| 3.5 | **dbt manifest importer** — `Catalog.from_dbt_manifest("manifest.json")`: schemas, docs, tags (PII!), relationships from dbt tests (`relationships`, `accepted_values` → FK graph + enums); Phase 6.2 later adds semantic-manifest metrics/grains | P0 | 3 d | A dbt project's physical guardrails configure themselves from artifacts it already has |
 | 3.6 | **Catalog freshness contract** — snapshot age metadata, staleness warnings, delta-refresh helpers | P2 | 2 d | Guard warns when validating against a catalog older than a configured TTL |
 
 ## Phase 4 — Ecosystem & developer experience
@@ -96,9 +96,26 @@ test plans, risks) under [plans/](plans/README.md).
 | # | Item | Prio | Effort | Notes |
 |---|---|:---:|:---:|---|
 | 5.1 | **`repair()` convenience loop** — user supplies an LLM callable; guard drives bounded validate→feedback→regenerate rounds | P2 | 2 d | Keeps the library LLM-agnostic: callable in, no SDK dependency |
-| 5.2 | **Intent-consistency checking** — compare the user's NL question against the SQL's semantics (tables/filters/aggregations) via embeddings/NLI; flag "answers a different question" | P3 | 2–3 w | Ship as an optional extra (`[intent]`); high research risk, high payoff |
+| 5.2 | **NL-to-intent analyzer experiment** — compare a question with the typed `QueryIntent` from 6.1; propose missing/ambiguous facets without deciding SQL correctness | P3 | 2–3 w | Optional analyzer reaches the precision gate; deterministic enforcement stays in 6.1 |
 | 5.3 | **Policy tuning from telemetry** — aggregate violation stats → suggested policy diffs ("13% of blocks are `notes`; consider exclude_from_star") | P3 | 1 w | Needs 2.5 audit stream first |
 | 5.4 | **Go/Rust hot path** — only if a per-query gateway use case materializes; keep the control plane in Python (per the v1 decision) | P3 | — | Trigger: a user needs <100 µs p99 in a proxy |
+
+## Phase 6 — Intent fidelity and reliable evaluation
+
+*Goal: detect valid-but-wrong SQL by checking governed business intent and by
+measuring semantic failures with trustworthy evaluation oracles.*
+*Research review: [October 2026](research/2026-10-text-to-sql-review.md) ·
+Detailed plan: [plans/phase-6-semantic-reliability.md](plans/phase-6-semantic-reliability.md)*
+
+| # | Item | Prio | Effort | Acceptance criterion |
+|---|---|:---:|:---:|---|
+| 6.1 | **Typed query intent** — independently specify measures, dimensions, filters, aggregation, grain, ordering, distinctness, and top-k; compare with final SQL facets | P0 | 5 d | Deterministic semantic mutations are blocked with ≤2% false blocks on adjudicated matches |
+| 6.2 | **Governed semantic catalog** — versioned metrics, dimensions, grains, relationship roles, mandatory filters, and evidence; import dbt semantic artifacts | P0 | 7 d | Wrong role, fan-out double counting, and incompatible aggregation grain are detected |
+| 6.3 | **Clarification and abstention protocol** — structured ambiguity/unanswerable issues with a complete lifecycle; caller owns dialogue | P1 | 3 d | Required unresolved issues cannot release SQL under block policy |
+| 6.4 | **Safe bounded probing** — allowlisted probe templates with RLS, row/time/scan/count budgets and private audit metadata | P1 | 4 d | Opaque IDs can be grounded without exposing a free-form execution tool |
+| 6.5 | **Semantic evaluation and benchmark governance** — adjudicated question/intent cases, realistic mutations, multi-instance counterfactual databases, repair-regression metrics | P0 | 5 d | ≥100 cases; ≥25 ambiguous/unanswerable; ≥20 counterfactual; deterministic CI evaluator |
+| 6.6 | **Resolved-turn context contract** — caller-owned current bindings, provenance, and supersession; no session store in core | P2 | 2 d | Stale intent cannot silently leak into a follow-up query |
+| 6.7 | **Validated template fingerprint** — canonical query-shape key bound to role, policy, catalogs, and intent | P1 | 2 d | Every security/semantic dependency invalidates cached validation |
 
 ---
 
@@ -110,6 +127,9 @@ test plans, risks) under [plans/](plans/README.md).
 | **v0.3** | 1.1 FK joins, 1.2 aggregation, 1.5 enums, 2.1 masking, 3.1 partition stats | *Catches what others can't* |
 | **v0.4** | 2.2–2.5 security depth, 4.1 MCP, 4.3 CLI, 4.4 policy-as-config | *Enterprise-shaped* |
 | **v0.5** | 3.4 dialect packs (Snowflake, BigQuery first), 4.2 adapters, 4.6 docs site | *Everywhere* |
+| **v0.6** | 6.5 semantic evaluation foundation + 6.1 typed intent checks | *Valid SQL that answers the intended question* |
+| **v0.7** | 6.2 governed semantics + dbt semantic import | *Metrics, roles, and grain are enforceable* |
+| **v0.8** | 6.3–6.4 and 6.6–6.7 | *Clarify, ground, remember safely, and cache safely* |
 | **v1.0** | API freeze, stability guarantees, deprecation policy, security audit pass | *Boring by design* |
 
 ## Cross-cutting rules (apply to every item)

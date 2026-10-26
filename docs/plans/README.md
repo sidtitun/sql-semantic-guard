@@ -13,6 +13,7 @@ policy fields, test plans, sequencing, risks, and a definition of done.
 | [phase-3-cost-and-engines.md](phase-3-cost-and-engines.md) | Phase 3 | Cost intelligence & dialect coverage | v0.4–v0.5 |
 | [phase-4-ecosystem.md](phase-4-ecosystem.md) | Phase 4 | Integrations, CLI, config, docs | v0.4–v0.5 |
 | [phase-5-exploratory.md](phase-5-exploratory.md) | Phase 5 | Experiments behind decision gates | unscheduled |
+| [phase-6-semantic-reliability.md](phase-6-semantic-reliability.md) | Phase 6 | Intent fidelity and reliable evaluation | v0.6–v0.8 |
 
 ## Conventions used in every plan
 

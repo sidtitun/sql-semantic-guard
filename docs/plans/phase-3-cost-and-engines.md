@@ -151,6 +151,13 @@ catalog_path=None, select_schemas=None)`:
 **Acceptance.** A dbt project gets semantic validation + PII rules + FK-aware
 joins from artifacts it already ships, in one constructor call.
 
+**Boundary after the October 2026 research review.** This item imports the
+physical catalog and test-derived constraints. Phase 6.2 separately imports
+dbt semantic-manifest / MetricFlow measures, dimensions, entities, time grains,
+and aggregation behavior into a versioned semantic catalog. Keeping the steps
+separate prevents physical-schema delivery from depending on evolving semantic
+artifact formats.
+
 ## 3.6 Catalog freshness contract (P2, 2 d)
 
 **Design.** `Catalog.snapshot_at: datetime | None` (reflectors stamp it,

@@ -45,35 +45,32 @@ effectively open; build alongside 4.2).
 **Acceptance.** The scripted `examples/self_repair_loop.py` rewritten on
 `repair()` behaves identically; no-progress case terminates in 2 rounds.
 
-## 5.2 Intent-consistency checking (P3, 2–3 w, research-risk)
+## 5.2 NL-to-intent analyzer (P3, 2–3 w, research-risk)
 
-**Hypothesis.** A query can pass every structural check and still answer a
-different question than the user asked ("revenue by month" → SQL grouping by
-week). Facet comparison between the NL request and the validated SQL can
-flag this *class* of error with useful precision.
+**Updated boundary (October 2026).** Phase 6.1 now owns deterministic checking
+between typed intent and SQL. This experiment owns only the uncertain boundary
+between natural language and that intent. It may propose or question facets;
+it may not override deterministic SQL checks or mark ambiguity resolved.
+
+**Hypothesis.** A model or classifier can map a question into typed measures,
+dimensions, filters, aggregation, time grain, ordering, and distinctness with
+useful precision, while abstaining on ambiguous or unsupported facets.
 
 **Cheapest honest test.** Before any model work:
-1. Build the deterministic half: `extract_facets(result)` — tables, filter
-   columns+operators, aggregation functions, group-by columns, time grain
-   (from `date_trunc`/partition predicates), limit/ordering. This is pure
-   AST work on machinery we already have, and is independently useful
-   (audit records, 5.3).
-2. Assemble an eval set: 300 (question, SQL, label) triples — 150 correct
-   pairs from public text-to-SQL dev sets (Spider/BIRD subset re-based onto
-   our fixture catalogs), 150 mismatch pairs made by systematic perturbation
-   (swap aggregation, wrong grain, dropped filter, wrong table).
-3. Baseline A: embedding similarity (question vs verbalized facets) with an
-   off-the-shelf sentence encoder. Baseline B: small-LLM judge with a fixed
-   rubric prompt over (question, facets). Measure **precision at the
-   operating point where recall = 30%** — this check may only ever be a
-   WARNING, so false positives are the thing that kills it.
-- Prototype lives in `experiments/intent/` (not shipped in the wheel); any
-  eventual product form is an optional extra (`[intent]`) emitting
-  `Code.INTENT_MISMATCH` at WARNING severity, never ERROR.
+1. Reuse the adjudicated question + `QueryIntent` cases from 6.5, including
+   ambiguous and unanswerable questions; do not derive labels from one gold SQL.
+2. Baseline A: rules/lexical mapping over semantic-catalog aliases. Baseline B:
+   a small LLM producing the 6.1 schema plus confidence and clarification
+   issues. Evaluate facet precision/recall and ambiguity coverage separately.
+3. Test stability across paraphrases and repeated runs. A changed answer across
+   runs is an abstention signal, not a majority-vote truth oracle.
+4. Prototype lives in `experiments/intent/`; eventual product form is an
+   optional adapter. The deterministic core takes the produced `QueryIntent`
+   and remains free of model/embedding dependencies.
 
-**Go/no-go gate:** ≥80% precision at 30% recall on the held-out split for
-either baseline. Below that: ship `extract_facets()` alone (it earns its
-keep) and shelve the classifier.
+**Go/no-go gate:** ≥90% precision on emitted facets, ≥80% required-ambiguity
+coverage, and ≤10% unnecessary clarification rate on a held-out split. Below
+that, keep intent construction application-owned and ship no analyzer.
 
 ## 5.3 Policy tuning from telemetry (P3, 1 w)
 

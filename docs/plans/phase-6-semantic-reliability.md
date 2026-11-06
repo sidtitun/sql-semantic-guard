@@ -1,7 +1,9 @@
 # Phase 6 — Intent fidelity and reliable evaluation
 
-> Research basis: [October 2026 review](../research/2026-10-text-to-sql-review.md)
-> · Target: **v0.6–v0.8** · Core effort: ~25 engineering days
+> Research basis: [October 2026 review](../research/2026-10-text-to-sql-review.md),
+> [Post-SQLFix](https://arxiv.org/abs/2610.41472), and
+> [business-semantic revalidation](https://arxiv.org/abs/2610.41090)
+> · Target: **v0.6–v0.8** · Core effort: ~32 engineering days
 >
 > Goal: detect valid-but-wrong SQL by checking a typed statement of business
 > intent, governed metric/grain semantics, and evidence quality. Every runtime
@@ -11,10 +13,10 @@
 ## Sequencing
 
 ```text
-6.5 evaluation schema ──▶ 6.1 intent contract ──▶ 6.2 semantic catalog
-                                  │                        │
-                                  ├──▶ 6.3 clarification  ├──▶ 6.4 probes
-                                  └──▶ 6.7 fingerprints   └──▶ 6.6 turn context
+6.5 evaluation schema ──▶ 6.1 intent contract ──▶ 6.2 semantic catalog ──▶ 6.9 revisions
+                                  │                        │                   │
+                                  ├──▶ 6.3 clarification  ├──▶ 6.4 probes     └──▶ 6.7 fingerprints
+                                  └──▶ 6.8 checked repair └──▶ 6.6 turn context
 ```
 
 6.5 starts first but lands with the first 6.1 fixtures. It is the acceptance
@@ -252,12 +254,110 @@ does not initially. Audit records may carry the fingerprint.
 **Acceptance.** Formatting and bind values preserve the key; role, RLS,
 policy, catalog, semantic intent, and SQL-structure changes invalidate it.
 
+## 6.8 Monotonic repair acceptance and regression interception (P0, 4 d)
+
+**Problem.** Execution-feedback loops let the same probabilistic model propose a
+repair and implicitly decide that the repair is better. A candidate can execute
+while introducing a new semantic, policy, or structural regression. With a
+single retry budget, accepting the wrong transition is worse than returning the
+original deterministic failure.
+
+**Contract.** Add an LLM-agnostic repair coordinator. The caller supplies the
+proposal callable; the guard supplies structured feedback and remains the only
+authority that may accept the transition:
+
+```python
+RepairRequest(
+    error_type="aggregation_grain_mismatch",
+    affected_clause="GROUP BY",
+    evidence=(...),
+    permitted_changes=("group_by", "projection"),
+    max_attempts=1,
+)
+
+outcome = guard.repair_once(sql, proposer, intent=intent)
+```
+
+The original and candidate each produce an immutable validation snapshot with
+AST identity, violations, confirmed checks, undecidable checks, policy/catalog/
+semantic revisions, and execution evidence. The candidate is reparsed and every
+applicable validator runs again. Execution success is evidence only and cannot
+override a deterministic denial.
+
+**Acceptance rule.** Apply a candidate only when all conditions hold:
+
+1. the blocking-violation set strictly decreases;
+2. every previously confirmed invariant remains confirmed—none becomes a
+   violation or undecidable;
+3. no violation outside the targeted rule family is introduced;
+4. the AST diff stays within the declared edit boundary;
+5. policy, role, physical catalog, semantic revision, and intent are unchanged;
+6. final validation is stable and idempotent.
+
+A failed proposal is rejected and the original result remains authoritative.
+Audit both accepted and rejected transitions, including the changed clauses,
+before/after violation sets, execution evidence, and rejection reason. Default
+to one proposal; higher budgets require explicit policy and retain the same
+monotonic checks on every transition.
+
+**Metrics.** Repair eligibility, proposal rate, accepted-repair rate, true repair
+rate, regression-interception rate, unresolved rate, token/latency cost, and
+violations before/after. Report execution repair separately from intent repair.
+
+**Acceptance.** Mutation tests cover fixes that trade one error for another,
+broaden filters, remove mandatory predicates, change aggregation grain, bypass
+RLS, or alter unrelated clauses. CI proves that no accepted candidate regresses
+a previously confirmed invariant, every rejected candidate leaves the original
+result intact, the one-attempt budget always halts, and revalidating an accepted
+result is idempotent.
+
+## 6.9 Semantic revision lifecycle and targeted revalidation (P0, 3 d)
+
+**Problem.** A schema can remain unchanged while a business definition changes.
+Cached validated SQL may therefore keep executing successfully with stale
+meaning—for example, after changing a claim-status mapping, eligible population,
+date basis, or metric formula. A content digest alone does not express which
+definition was requested or when it applies.
+
+**Model.** Keep these identities separate:
+
+- semantic document/schema-format version;
+- physical catalog version;
+- policy version;
+- business-definition revision;
+- event/report interval and knowledge cutoff.
+
+Add immutable revision metadata to governed semantic objects: stable object ID,
+revision ID, effective interval, optional knowledge cutoff, superseded revision,
+change reason, owner/evidence, and content digest. A resolved `QueryIntent`
+binds each referenced object to an explicit revision. The latest applicable
+revision may be resolved by policy, while an explicitly requested historical
+revision remains valid.
+
+**Revalidation.** Produce a semantic-revision diff listing changed objects and
+their dependents. Use it to invalidate affected template fingerprints and replay
+the relevant 6.5 cases. Unrelated definitions retain their cache identities.
+The audit record states the requested and resolved revisions; it never silently
+substitutes a newer definition.
+
+For high-risk definition changes, support obligation fixtures containing legal
+counterexample data that distinguishes old and new meanings. Agreement on the
+current database is recorded as finite evidence, not proof of conformance.
+
+**Acceptance.** In the claims fixture, changing the meaning of “under review,”
+a mandatory population filter, or the processed-date basis invalidates every
+affected cached validation and selects the new expected SQL. An explicit
+historical request continues to validate against its old revision. An unrelated
+metric change preserves unaffected fingerprints. Replay output identifies
+conforming, nonconforming, and unresolved cases without treating snapshot
+agreement as semantic proof.
+
 ## Release slices
 
 | Release | Contents | Exit condition |
 |---|---|---|
-| v0.6 | 6.5 corpus schema + 6.1 intent checks | Deterministic mutation targets met; legacy API unchanged |
-| v0.7 | 6.2 semantic catalog + dbt semantic import | Claims fixture catches route/grain/fan-out errors |
+| v0.6 | 6.5 corpus schema + 6.1 intent checks + 6.8 checked repair | Deterministic mutation targets met; accepted repairs preserve every prior invariant; legacy API unchanged |
+| v0.7 | 6.2 semantic catalog + 6.9 revision lifecycle + dbt semantic import | Claims fixture catches route/grain/fan-out errors; definition changes trigger targeted revalidation |
 | v0.8 | 6.3, 6.4, 6.6, 6.7 | Clarification/probe privacy gates and cache invalidation matrix pass |
 
 ## Phase definition of done
@@ -269,4 +369,6 @@ policy, catalog, semantic intent, and SQL-structure changes invalidate it.
 - [ ] Evaluation separates safety, execution, intent, abstention, and repair regression
 - [ ] Multi-turn context is caller-owned, explicit, current, and auditable
 - [ ] Cached validation identities include every security/semantic dependency
+- [ ] Every accepted repair makes deterministic progress and preserves all previously confirmed invariants
+- [ ] Business-definition revisions are distinct from schema versions and trigger targeted cache invalidation and replay
 

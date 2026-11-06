@@ -116,6 +116,8 @@ Detailed plan: [plans/phase-6-semantic-reliability.md](plans/phase-6-semantic-re
 | 6.5 | **Semantic evaluation and benchmark governance** — adjudicated question/intent cases, realistic mutations, multi-instance counterfactual databases, repair-regression metrics | P0 | 5 d | ≥100 cases; ≥25 ambiguous/unanswerable; ≥20 counterfactual; deterministic CI evaluator |
 | 6.6 | **Resolved-turn context contract** — caller-owned current bindings, provenance, and supersession; no session store in core | P2 | 2 d | Stale intent cannot silently leak into a follow-up query |
 | 6.7 | **Validated template fingerprint** — canonical query-shape key bound to role, policy, catalogs, and intent | P1 | 2 d | Every security/semantic dependency invalidates cached validation |
+| 6.8 | **Monotonic repair acceptance** — one bounded LLM repair proposal is treated as untrusted; reparse and rerun every deterministic validator before applying it | P0 | 4 d | Accept only when blocking violations strictly decrease, no previously satisfied check regresses or becomes undecidable, edit boundaries hold, and final validation is idempotent; otherwise retain the original result |
+| 6.9 | **Semantic revision lifecycle and revalidation** — distinguish schema-format versions from business-definition revisions; bind intent, audit, templates, and caches to the requested effective revision | P0 | 3 d | A changed status/metric definition invalidates affected cached validations and triggers replay, explicit historical revisions remain selectable, and unrelated definitions remain valid |
 
 ---
 
@@ -127,8 +129,8 @@ Detailed plan: [plans/phase-6-semantic-reliability.md](plans/phase-6-semantic-re
 | **v0.3** | 1.1 FK joins, 1.2 aggregation, 1.5 enums, 2.1 masking, 3.1 partition stats | *Catches what others can't* |
 | **v0.4** | 2.2–2.5 security depth, 4.1 MCP, 4.3 CLI, 4.4 policy-as-config | *Enterprise-shaped* |
 | **v0.5** | 3.4 dialect packs (Snowflake, BigQuery first), 4.2 adapters, 4.6 docs site | *Everywhere* |
-| **v0.6** | 6.5 semantic evaluation foundation + 6.1 typed intent checks | *Valid SQL that answers the intended question* |
-| **v0.7** | 6.2 governed semantics + dbt semantic import | *Metrics, roles, and grain are enforceable* |
+| **v0.6** | 6.5 semantic evaluation foundation + 6.1 typed intent checks + 6.8 monotonic repair acceptance | *Valid SQL and checked repair transitions* |
+| **v0.7** | 6.2 governed semantics + 6.9 semantic revision lifecycle + dbt semantic import | *Metrics, roles, grain, and definition changes are enforceable* |
 | **v0.8** | 6.3–6.4 and 6.6–6.7 | *Clarify, ground, remember safely, and cache safely* |
 | **v1.0** | API freeze, stability guarantees, deprecation policy, security audit pass | *Boring by design* |
 
@@ -139,3 +141,5 @@ Detailed plan: [plans/phase-6-semantic-reliability.md](plans/phase-6-semantic-re
 3. **Every feature lands with tests, a violation-code docs page, and a feedback-string that an LLM can act on** — the repair loop is the product.
 4. **No new required dependencies.** Everything beyond `sqlglot` stays behind extras.
 5. **Benchmark before merge.** The perf gate (0.5) applies to every phase.
+6. **Repairs are untrusted transitions.** Execution success or an LLM judgment cannot authorize a repair; deterministic revalidation must prove monotonic progress and preservation before the candidate replaces the prior state.
+7. **Business semantics are revisioned independently.** Schema-format, physical-catalog, policy, and business-definition versions remain distinct and all participate in audit identity and cache invalidation.

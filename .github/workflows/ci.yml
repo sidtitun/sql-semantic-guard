@@ -15,7 +15,9 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Python 3.9 is unavailable on the ubuntu-26.04 image behind ubuntu-latest.
+    # Pin this compatibility matrix until Python 3.9 support is retired.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:

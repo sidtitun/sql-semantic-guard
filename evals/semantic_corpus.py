@@ -15,6 +15,11 @@ from sqlguard import (
     OrderIntent,
     Policy,
     QueryIntent,
+    RelationshipRole,
+    SemanticCatalog,
+    SemanticEntity,
+    SemanticEvidence,
+    SemanticMeasure,
     SQLGuard,
 )
 
@@ -94,9 +99,7 @@ def _validate_case(case: Any, seen: set[str]) -> dict[str, Any]:
     for mutation in case.get("mutations", []):
         if not isinstance(mutation, dict):
             raise ValueError(f"{case_id}.mutations entries must be objects")
-        mutation_id = _require_string(
-            mutation.get("mutation_id"), f"{case_id}.mutation_id"
-        )
+        mutation_id = _require_string(mutation.get("mutation_id"), f"{case_id}.mutation_id")
         if mutation_id in mutation_ids:
             raise ValueError(f"{case_id} has duplicate mutation {mutation_id}")
         mutation_ids.add(mutation_id)
@@ -149,8 +152,7 @@ def load_semantic_corpus(
         if not isinstance(statements, list) or not statements:
             raise ValueError(f"{instance_id}.setup_sql must not be empty")
         instances[instance_id] = tuple(
-            _require_string(statement, f"{instance_id}.setup_sql")
-            for statement in statements
+            _require_string(statement, f"{instance_id}.setup_sql") for statement in statements
         )
     for case in cases:
         execution = case.get("execution_oracle")
@@ -203,6 +205,33 @@ def build_semantic_guard() -> SQLGuard:
             },
         }
     )
+    semantic_catalog = SemanticCatalog(
+        version="semantic-smoke-v1",
+        entities=[
+            SemanticEntity("order", "orders", grain=["id"]),
+            SemanticEntity("line_item", "line_items", grain=["id"]),
+        ],
+        measures=[
+            SemanticMeasure(
+                "order_revenue",
+                "order",
+                "sum",
+                "amount",
+                source_grain=["id"],
+            )
+        ],
+        relationships=[
+            RelationshipRole(
+                "order_line_items",
+                "order",
+                "line_item",
+                ["id"],
+                ["order_id"],
+                "one_to_many",
+            )
+        ],
+        evidence=[SemanticEvidence("synthetic semantic smoke corpus", "v1")],
+    )
     return SQLGuard(
         catalog,
         Policy(
@@ -211,4 +240,5 @@ def build_semantic_guard() -> SQLGuard:
             intent_enforcement="block",
         ),
         dialect="postgres",
+        semantic_catalog=semantic_catalog,
     )

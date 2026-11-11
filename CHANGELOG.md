@@ -7,6 +7,9 @@ versioning: [SemVer](https://semver.org). Violation `Code` values and
 ## [Unreleased]
 
 ### Added
+- Immutable governed semantic catalogs with canonical snapshot digests, eager
+  physical/FK binding, privacy-separated public views, semantic measure IDs,
+  metric-owned filter checks, and direct relationship fanout protection.
 - Versioned semantic evaluation schema and smoke corpus with adjudication
   metadata, intent mutations, ambiguity labels, counterfactual database
   instances, explicit oracle identity, and set/multiset result comparison.

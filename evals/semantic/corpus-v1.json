@@ -31,7 +31,7 @@
       "question": "What is total order revenue?",
       "answerability": "answerable",
       "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Total revenue requires SUM rather than AVG.", "source": "synthetic-v1"},
-      "intent": {"measures": [{"aggregation": "sum", "column": "amount", "table": "orders", "alias": "revenue"}]},
+      "intent": {"measures": [{"aggregation": "sum", "column": "amount", "table": "orders", "alias": "revenue", "semantic_id": "order_revenue"}]},
       "accepted_sql": ["SELECT SUM(amount) AS revenue FROM orders"],
       "mutations": [{"mutation_id": "sum-to-average", "class": "wrong_aggregation", "sql": "SELECT AVG(amount) AS revenue FROM orders", "expected_guard": "blocked", "expected_codes": ["intent_constraint_conflict"]}]
     },
@@ -87,10 +87,10 @@
       "question": "What is total order revenue?",
       "answerability": "answerable",
       "adjudication": {"status": "accepted", "reviewer_count": 2, "rationale": "Joining line items before summing order amounts duplicates order-grain measures.", "source": "synthetic-v1"},
-      "intent": {"measures": [{"aggregation": "sum", "column": "amount", "table": "orders", "alias": "revenue"}]},
+      "intent": {"measures": [{"aggregation": "sum", "column": "amount", "table": "orders", "alias": "revenue", "semantic_id": "order_revenue"}]},
       "accepted_sql": ["SELECT SUM(amount) AS revenue FROM orders"],
       "execution_oracle": {"comparators": ["set", "multiset"], "instance_ids": ["orders-one-to-one-v1", "orders-duplicates-and-fanout-v1"]},
-      "mutations": [{"mutation_id": "join-fanout", "class": "fanout", "sql": "SELECT SUM(o.amount) AS revenue FROM orders AS o JOIN line_items AS li ON li.order_id = o.id", "expected_guard": "known_gap", "expected_codes": []}]
+      "mutations": [{"mutation_id": "join-fanout", "class": "fanout", "sql": "SELECT SUM(o.amount) AS revenue FROM orders AS o JOIN line_items AS li ON li.order_id = o.id", "expected_guard": "blocked", "expected_codes": ["fanout_aggregation_risk"]}]
     },
     {
       "case_id": "ambiguity-metric-010",

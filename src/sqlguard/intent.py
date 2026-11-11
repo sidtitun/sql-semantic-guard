@@ -44,6 +44,7 @@ class MeasureIntent:
     table: str | None = None
     alias: str | None = None
     distinct: bool | None = None
+    semantic_id: str | None = None
 
     def __post_init__(self) -> None:
         aggregation = self.aggregation.lower().strip()
@@ -56,6 +57,10 @@ class MeasureIntent:
             object.__setattr__(self, "table", _clean_identifier(self.table, "table"))
         if self.alias is not None:
             object.__setattr__(self, "alias", _clean_identifier(self.alias, "alias"))
+        if self.semantic_id is not None:
+            object.__setattr__(
+                self, "semantic_id", _clean_identifier(self.semantic_id, "semantic_id")
+            )
         if self.column is None and aggregation != "count":
             raise ValueError("only count may omit its column (COUNT(*))")
 
@@ -153,7 +158,9 @@ class QueryIntent:
             raise ValueError("limit must be positive or None")
         if isinstance(self.expected_grain, (str, bytes)):
             raise TypeError("expected_grain must be a sequence of field names")
-        grain = tuple(_clean_identifier(value, "expected_grain item") for value in self.expected_grain)
+        grain = tuple(
+            _clean_identifier(value, "expected_grain item") for value in self.expected_grain
+        )
         object.__setattr__(self, "expected_grain", grain)
 
     def to_dict(self, *, include_values: bool = False) -> dict[str, Any]:
@@ -177,6 +184,7 @@ class QueryIntent:
                     "column": item.column,
                     "alias": item.alias,
                     "distinct": item.distinct,
+                    "semantic_id": item.semantic_id,
                 }
                 for item in self.measures
             ],
@@ -268,7 +276,10 @@ def _table_aliases(select: exp.Select, index: CatalogIndex) -> dict[str, str]:
 
 
 def _field_matches(
-    table: str | None, column: str | None, expected_table: str | None, expected_column: str | None,
+    table: str | None,
+    column: str | None,
+    expected_table: str | None,
+    expected_column: str | None,
     index: CatalogIndex,
 ) -> bool:
     if column is None or expected_column is None:
@@ -383,7 +394,11 @@ def _group_expressions(select: exp.Select) -> list[exp.Expression]:
                 item = select.expressions[position]
                 resolved.append(item.this if isinstance(item, exp.Alias) else item)
                 continue
-        if isinstance(expression, exp.Column) and not expression.table and expression.name in aliases:
+        if (
+            isinstance(expression, exp.Column)
+            and not expression.table
+            and expression.name in aliases
+        ):
             resolved.append(aliases[expression.name])
         else:
             resolved.append(expression)
@@ -407,8 +422,13 @@ def _time_grain(expr: exp.Expression) -> str | None:
 def _extract(
     tree: exp.Expression, index: CatalogIndex, params: Mapping[str, Any]
 ) -> tuple[
-    list[_ObservedMeasure], list[_ObservedDimension], list[_ObservedFilter],
-    list[tuple[str, str]], bool | None, int | None, list[str],
+    list[_ObservedMeasure],
+    list[_ObservedDimension],
+    list[_ObservedFilter],
+    list[tuple[str, str]],
+    bool | None,
+    int | None,
+    list[str],
 ]:
     if not isinstance(tree, exp.Select):
         return [], [], [], [], None, None, ["outer_query_shape"]
@@ -437,7 +457,10 @@ def _extract(
         if ref is not None:
             dimensions.append(
                 _ObservedDimension(
-                    ref[0], ref[1], _norm(alias, index), _time_grain(expression),
+                    ref[0],
+                    ref[1],
+                    _norm(alias, index),
+                    _time_grain(expression),
                     expression.sql() in grouped_sql,
                 )
             )
@@ -465,7 +488,9 @@ def _extract(
             field = (
                 index.normalize(expression.name)
                 if isinstance(expression, exp.Column)
-                else ref[1] if ref else index.normalize(expression.sql())
+                else ref[1]
+                if ref
+                else index.normalize(expression.sql())
             )
             ordering.append((field, "desc" if item.args.get("desc") else "asc"))
     limit_value: int | None = None
@@ -475,7 +500,15 @@ def _extract(
             limit_value = int(limit.expression.this)
         except (TypeError, ValueError):
             pass
-    return measures, dimensions, filters, ordering, tree.args.get("distinct") is not None, limit_value, []
+    return (
+        measures,
+        dimensions,
+        filters,
+        ordering,
+        tree.args.get("distinct") is not None,
+        limit_value,
+        [],
+    )
 
 
 def _safe_value(value: Any) -> tuple[str, str]:
@@ -520,7 +553,8 @@ def check_query_intent(
 
     for expected_measure in intent.measures:
         measure_candidates = [
-            item for item in measures
+            item
+            for item in measures
             if _field_matches(
                 item.table,
                 item.column,
@@ -530,16 +564,14 @@ def check_query_intent(
             )
         ]
         measure_matches = [
-            item for item in measure_candidates
+            item
+            for item in measure_candidates
             if item.aggregation == expected_measure.aggregation
             and (
                 expected_measure.alias is None
                 or item.alias == index.normalize(expected_measure.alias)
             )
-            and (
-                expected_measure.distinct is None
-                or item.distinct == expected_measure.distinct
-            )
+            and (expected_measure.distinct is None or item.distinct == expected_measure.distinct)
         ]
         key = f"measure:{expected_measure.alias or expected_measure.column or '*'}"
         if measure_matches:
@@ -562,7 +594,8 @@ def check_query_intent(
     has_aggregation = bool(measures)
     for expected_dimension in intent.dimensions:
         dimension_candidates = [
-            item for item in dimensions
+            item
+            for item in dimensions
             if _field_matches(
                 item.table,
                 item.column,
@@ -572,7 +605,8 @@ def check_query_intent(
             )
         ]
         dimension_matches = [
-            item for item in dimension_candidates
+            item
+            for item in dimension_candidates
             if (
                 expected_dimension.alias is None
                 or item.alias == index.normalize(expected_dimension.alias)
@@ -603,7 +637,8 @@ def check_query_intent(
 
     for expected_filter in intent.filters:
         filter_candidates = [
-            item for item in filters
+            item
+            for item in filters
             if _field_matches(
                 item.table,
                 item.column,
@@ -612,11 +647,10 @@ def check_query_intent(
                 index,
             )
         ]
-        expected_values = tuple(
-            sorted(_safe_value(value) for value in expected_filter.values)
-        )
+        expected_values = tuple(sorted(_safe_value(value) for value in expected_filter.values))
         filter_matches = [
-            item for item in filter_candidates
+            item
+            for item in filter_candidates
             if item.operator == expected_filter.operator
             and tuple(sorted(_safe_value(value) for value in item.values)) == expected_values
         ]

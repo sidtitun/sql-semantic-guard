@@ -89,6 +89,19 @@ joins undetected.
 Expressions are parsed and bound eagerly. Callers select route IDs; they never
 submit editable join predicates under a trusted route name.
 
+Keep business-facing semantic objects separate from their physical mappings.
+An LLM-facing/public view contains semantic IDs, descriptions, aliases,
+cardinality, and supported grains but excludes table names, column names, join
+predicates, and governed predicate values. The full mapping remains local and
+is included in the catalog digest. Tests inspect the complete outbound payload,
+not only the semantic-object block, before making any identifier-hiding claim.
+
+**Delivery slices.** (A) immutable catalog, evidence, canonical digest, eager
+physical binding, semantic measure IDs, mandatory filters, and direct fan-out
+checks; (B) selectable version-bound route handles, role predicates, safe
+pre-aggregation recognition, and broader grain compatibility; (C) dbt
+semantic-manifest/OSI import. Each slice updates the 6.5 known-gap baselines.
+
 **Checks.** Recognize declared measures in the AST; verify mandatory filters;
 verify route edges and role predicates; compare measure/output grain; detect
 fan-out before aggregation; require safe pre-aggregation or refuse when a
@@ -106,6 +119,8 @@ Keep the internal model independent from dbt.
 **Acceptance.** Detect wrong relationship role and duplicated measures in a
 claims/insurance fixture; accept safe pre-aggregation controls; reject invented
 route IDs at construction; round-trip semantic catalogs deterministically.
+Changing the catalog or physical mapping changes its digest, and the public
+semantic view contains no physical identifiers.
 
 ## 6.3 Clarification, answerability, and abstention protocol (P1, 3 d)
 

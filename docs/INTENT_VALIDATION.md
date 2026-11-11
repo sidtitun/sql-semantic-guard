@@ -96,10 +96,15 @@ The stable violation classes are:
 - `intent_undecidable`: the checker cannot prove the contract for the outer
   query shape. In block mode this fails closed.
 
+When a governed semantic catalog is attached, `MeasureIntent.semantic_id`
+selects a versioned business definition rather than trusting the model to
+define it. See [Governed semantic catalog](SEMANTIC_CATALOG.md).
+
 ## Current boundary
 
 The first release validates one outer `SELECT`. Set-operation roots such as
 `UNION` are reported as undecidable rather than silently accepted. This API
-does not infer intent from natural language, validate business metric
-definitions, or prove result equivalence. Governed metrics and relationship
-roles are the next layer planned on top of this contract.
+does not infer intent from natural language or prove result equivalence. The
+optional semantic catalog validates governed metric definitions and direct
+relationship fanout; route selection, safe pre-aggregation recognition, and
+general grain compatibility remain later slices.

@@ -25,9 +25,7 @@ def test_v1_corpus_is_governed_and_covers_initial_slices():
         "unanswerable",
     }
     mutation_classes = {
-        mutation["class"]
-        for case in corpus.cases
-        for mutation in case.get("mutations", [])
+        mutation["class"] for case in corpus.cases for mutation in case.get("mutations", [])
     }
     assert mutation_classes >= {
         "missing_filter",
@@ -58,7 +56,7 @@ def test_semantic_smoke_gate_and_known_gap_baseline():
 
     assert report["accepted_sql_recall"] == 1.0
     assert report["deterministic_mutation_recall"] == 1.0
-    assert report["known_gaps_total"] == report["known_gaps_observed"] == 1
+    assert report["known_gaps_total"] == report["known_gaps_observed"] == 0
     assert report["set_only_matches"] >= 1
     assert report["data_only_coincidences"] >= 2
     assert report["required_ambiguities"] >= 3

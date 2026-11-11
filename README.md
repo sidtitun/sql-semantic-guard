@@ -245,6 +245,43 @@ is off by default for backward compatibility. See
 [Query intent validation](docs/INTENT_VALIDATION.md) for the contract and
 deployment guidance.
 
+### Bind intent to governed business metrics
+
+For business definitions such as net revenue and order-grain measures, attach
+an optional `SemanticCatalog` to the guard and put its stable ID on the
+`MeasureIntent`. SQLGuard eagerly binds the semantic catalog to the physical
+catalog, verifies metric-owned filters, and blocks direct joins that can
+duplicate a measure across a declared one-to-many relationship:
+
+```python
+from sqlguard import SemanticCatalog, SemanticEntity, SemanticMeasure
+
+semantics = SemanticCatalog(
+    version="finance-2026-10",
+    entities=[SemanticEntity("purchase", "orders", grain=["id"])],
+    measures=[
+        SemanticMeasure(
+            "order_revenue", "purchase", "sum", "amount", source_grain=["id"]
+        )
+    ],
+)
+guard = SQLGuard(catalog, policy, semantic_catalog=semantics)
+
+intent = QueryIntent(
+    measures=[
+        MeasureIntent(
+            "sum", "amount", table="orders", semantic_id="order_revenue"
+        )
+    ]
+)
+result = guard.validate(generated_sql, intent=intent)
+```
+
+The catalog exposes a public semantic view that omits physical mappings and a
+canonical digest for audit identity. See the [governed semantic catalog guide](docs/SEMANTIC_CATALOG.md)
+for relationship roles, metric-owned filters, privacy boundaries, and current
+limitations.
+
 ### Minimal API-service pattern
 
 Keep validation in the trusted backend, immediately before execution:
@@ -299,6 +336,7 @@ SELECT statement is allowed.
 | Type checks | `WHERE amount = 'expensive'`; `WHERE created_at > 'last tuesday'` | `type_mismatch` |
 | Aggregation checks | `SELECT status, SUM(amount) FROM orders`; `WHERE SUM(amount) > 10` | `group_by_violation`, `aggregate_in_where` |
 | Query intent | Missing requested filter; `AVG(amount)` when `SUM(amount)` was requested; wrong time grain/order/limit | `intent_constraint_missing`, `intent_constraint_conflict`, `intent_undecidable` |
+| Governed semantics | Unknown metric ID; changed metric definition; missing metric filter; direct one-to-many fanout | `unknown_semantic_object`, `metric_definition_mismatch`, `relationship_role_mismatch`, `fanout_aggregation_risk` |
 | Domain checks | `WHERE status = 'shiped'` when the catalog allows `shipped` | `unknown_value` |
 | Nested/derived binding | `payload.refferer`; `SELECT sub.bogus FROM (SELECT * FROM orders) sub` | `unknown_column` |
 | Relationship checks | `orders.id = customers.id` when the declared FK is `orders.customer_id = customers.id` | `invalid_join_path` |

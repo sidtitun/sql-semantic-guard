@@ -49,6 +49,10 @@ class Code(str, Enum):
     INTENT_CONSTRAINT_MISSING = "intent_constraint_missing"
     INTENT_CONSTRAINT_CONFLICT = "intent_constraint_conflict"
     INTENT_UNDECIDABLE = "intent_undecidable"
+    UNKNOWN_SEMANTIC_OBJECT = "unknown_semantic_object"
+    METRIC_DEFINITION_MISMATCH = "metric_definition_mismatch"
+    RELATIONSHIP_ROLE_MISMATCH = "relationship_role_mismatch"
+    FANOUT_AGGREGATION_RISK = "fanout_aggregation_risk"
 
     # Column-level policy
     COLUMN_DENIED = "column_denied"
@@ -221,6 +225,7 @@ class QueryStats:
     cost: CostEstimate | None = None
     complexity: dict[str, int] = field(default_factory=dict)
     intent: IntentCheckResult | None = None
+    semantic_catalog_digest: str | None = None
     checks_run: list[str] = field(default_factory=list)
     checks_skipped: list[str] = field(default_factory=list)
 
@@ -233,6 +238,7 @@ class QueryStats:
             "cost": self.cost.to_dict() if self.cost else None,
             "complexity": dict(self.complexity),
             "intent": self.intent.to_dict() if self.intent else None,
+            "semantic_catalog_digest": self.semantic_catalog_digest,
             "checks_run": list(self.checks_run),
             "checks_skipped": list(self.checks_skipped),
         }
@@ -317,9 +323,7 @@ class ValidationResult:
                 + (f", {len(warnings)} warning(s)." if warnings else ".")
             )
         elif self.valid:
-            lines.append(
-                f"The SQL passed validation with {len(warnings)} warning(s)."
-            )
+            lines.append(f"The SQL passed validation with {len(warnings)} warning(s).")
         else:
             lines.append(
                 f"The SQL failed validation with {len(errors)} error(s)"

@@ -32,6 +32,15 @@ from sqlguard.errors import CatalogError, PolicyError, SQLGuardError, Validation
 from sqlguard.guard import SQLGuard
 from sqlguard.intent import DimensionIntent, FilterIntent, MeasureIntent, OrderIntent, QueryIntent
 from sqlguard.policy import ColumnRule, Policy, PolicyOverlay, PolicySet, RLSRule
+from sqlguard.semantic_catalog import (
+    RelationshipRole,
+    SemanticCatalog,
+    SemanticDimension,
+    SemanticEntity,
+    SemanticEvidence,
+    SemanticFilter,
+    SemanticMeasure,
+)
 from sqlguard.violations import (
     Code,
     CostEstimate,
@@ -55,6 +64,13 @@ __all__ = [
     "FilterIntent",
     "OrderIntent",
     "IntentCheckResult",
+    "SemanticCatalog",
+    "SemanticEntity",
+    "SemanticMeasure",
+    "SemanticDimension",
+    "SemanticFilter",
+    "SemanticEvidence",
+    "RelationshipRole",
     "AuditRecord",
     "Catalog",
     "Table",

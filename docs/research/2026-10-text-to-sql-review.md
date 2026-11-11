@@ -83,3 +83,26 @@ Underspecification in Agentic Text-to-SQL* (arXiv:2610.02739), and *TIDE-Bench*
 (arXiv:2608.29543). These are recent preprints; their concrete thresholds are
 not adopted as universal production gates.
 
+## Post-6.5 semantic-catalog addendum
+
+The review after the evaluation foundation sharpened Phase 6.2:
+
+- Semantic IDs and route handles are bound to immutable catalog snapshots;
+  planners select governed choices and never author trusted join paths.
+- Physical tables, columns, predicates, and mappings remain local. Any claim
+  that a semantic layer hides schema identifiers requires inspection of the
+  complete model-facing payload, because examples or prompt scaffolding can
+  reintroduce them.
+- Cardinality and fan-out are governance facts, not retrieval scores. Join-graph
+  retrieval can find useful tables, but only declared relationship roles and
+  multiplicity metadata may authorize or certify a route.
+- The initial core represents logical meaning and stable references. Dialect
+  rendering, compiler-style safe grain lowering, and dbt/OSI import are later
+  adapters/slices with their own semantic-preservation tests.
+
+Design signals: *Bounded Semantic Planning and Deterministic Compilation*
+(Zenodo 21966805), *A semantic layer architecture for removing schema
+identifiers from external LLM prompts* (2026), *Closing the Cross-Dialect Gap*
+(2026), and *JoinGR* (2026). The latest dbt/MetricFlow specifications reinforce
+the distinction between semantic models, entities, dimensions, metric-owned
+filters, aggregation time dimensions, and query-level filters.

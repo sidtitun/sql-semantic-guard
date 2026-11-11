@@ -30,6 +30,11 @@ from sqlguard.intent import QueryIntent, check_query_intent
 from sqlguard.parameters import ParameterError, render_parameters
 from sqlguard.policy import ColumnRule, Policy, PolicySet
 from sqlguard.scopeindex import ScopeIndex
+from sqlguard.semantic_catalog import (
+    SemanticCatalog,
+    SemanticCatalogIndex,
+    check_semantic_catalog,
+)
 from sqlguard.violations import (
     Code,
     QueryStats,
@@ -78,6 +83,9 @@ class SQLGuard:
             catalog-statistics heuristic. Estimators after the first only run
             when the query has no blocking errors (so e.g. EXPLAIN-based
             estimators never see invalid SQL).
+        semantic_catalog: optional governed business semantics, eagerly bound
+            to ``catalog``. Semantic checks run only when an intent is supplied
+            and ``intent_enforcement`` is ``warn`` or ``block``.
     """
 
     def __init__(
@@ -86,6 +94,7 @@ class SQLGuard:
         policy: Policy | PolicySet | None = None,
         dialect: str = "postgres",
         estimators: Sequence[cost.CostEstimator] | None = None,
+        semantic_catalog: SemanticCatalog | None = None,
     ) -> None:
         raw = (dialect or "postgres").lower().strip()
         self.dialect = _DIALECT_ALIASES.get(raw, raw)
@@ -104,6 +113,12 @@ class SQLGuard:
             self.policy = policy
         self._audit_observers: list[Callable[[AuditRecord], None]] = []
         self.index = CatalogIndex(catalog, self.dialect)
+        self.semantic_catalog = semantic_catalog
+        self.semantic_index = (
+            SemanticCatalogIndex(semantic_catalog, self.index)
+            if semantic_catalog is not None
+            else None
+        )
         self.estimators: list[cost.CostEstimator] = (
             list(estimators) if estimators is not None else [cost.HeuristicCostEstimator()]
         )
@@ -225,19 +240,31 @@ class SQLGuard:
                         at=at,
                         dialect=self.dialect,
                         role=role,
-                        sql_sha256=hashlib.sha256(sql.encode("utf-8", errors="surrogatepass")).hexdigest(),
+                        sql_sha256=hashlib.sha256(
+                            sql.encode("utf-8", errors="surrogatepass")
+                        ).hexdigest(),
                         param_keys=tuple(sorted(params.keys())) if params is not None else (),
                         valid=result.valid if result is not None else False,
                         would_block=result.would_block if result is not None else False,
-                        violation_codes=tuple(dict.fromkeys(v.code.value for v in result.violations)) if result is not None else (),
-                        rewrite_kinds=tuple(dict.fromkeys(r.kind.value for r in result.rewrites)) if result is not None else (),
+                        violation_codes=tuple(
+                            dict.fromkeys(v.code.value for v in result.violations)
+                        )
+                        if result is not None
+                        else (),
+                        rewrite_kinds=tuple(dict.fromkeys(r.kind.value for r in result.rewrites))
+                        if result is not None
+                        else (),
                         tables=tuple(result.stats.tables) if result is not None else (),
-                        estimated_bytes=result.stats.cost.bytes_scanned if result is not None and result.stats.cost else None,
+                        estimated_bytes=result.stats.cost.bytes_scanned
+                        if result is not None and result.stats.cost
+                        else None,
                         duration_ms=(time.perf_counter() - started) * 1000,
                         error_type=error_type,
                         sql=sql if policy.audit_include_sql else None,
                     )
-                    sinks = ((policy.audit_sink,) if policy.audit_sink is not None else ()) + observers
+                    sinks = (
+                        (policy.audit_sink,) if policy.audit_sink is not None else ()
+                    ) + observers
                     for sink in sinks:
                         try:
                             sink(record)
@@ -280,7 +307,12 @@ class SQLGuard:
         dialect, index = self.dialect, self.index
         violations: list[Violation] = []
         rewrites: list[Rewrite] = []
-        stats = QueryStats(role=role)
+        stats = QueryStats(
+            role=role,
+            semantic_catalog_digest=(
+                self.semantic_catalog.digest if self.semantic_catalog is not None else None
+            ),
+        )
         run, skipped = stats.checks_run, stats.checks_skipped
         audited_sql: str | None = None
         bound_parameters: dict[str, Any] | list[Any] | None = None
@@ -301,6 +333,7 @@ class SQLGuard:
             "join_checks",
             "partition_filters",
             "intent_checks",
+            "semantic_catalog",
             "cost_estimation",
             "output_audit",
         ]
@@ -458,9 +491,7 @@ class SQLGuard:
 
         run.append("domain_checks")
         violations.extend(
-            semantics.check_allowed_values(
-                tree, index, policy, dialect, scope_index=scope_index
-            )
+            semantics.check_allowed_values(tree, index, policy, dialect, scope_index=scope_index)
         )
 
         # 8. column policy --------------------------------------------------------
@@ -517,6 +548,20 @@ class SQLGuard:
         else:
             skipped.append("intent_checks")
 
+        if (
+            intent is not None
+            and self.semantic_index is not None
+            and policy.intent_enforcement != "off"
+        ):
+            run.append("semantic_catalog")
+            violations.extend(
+                check_semantic_catalog(
+                    tree, intent, self.semantic_index, params, policy.intent_enforcement
+                )
+            )
+        else:
+            skipped.append("semantic_catalog")
+
         # 12. final output audit -------------------------------------------------
         # Render once, then independently parse and gate the exact SQL that will
         # be returned and passed to external estimators such as EXPLAIN.
@@ -567,9 +612,7 @@ class SQLGuard:
                 stats.cost = estimate
 
         # stats: referenced columns on the final tree -----------------------
-        referenced = semantics.collect_referenced_columns(
-            tree, index, scope_index=scope_index
-        )
+        referenced = semantics.collect_referenced_columns(tree, index, scope_index=scope_index)
         for (schema, name), cols in sorted(referenced.items()):
             display = f"{schema}.{name}" if schema else name
             stats.referenced_columns[display] = (
@@ -684,6 +727,7 @@ class SQLGuard:
         policy: Policy | PolicySet | None = None,
         include_stats: bool = True,
         estimators: Sequence[cost.CostEstimator] | None = None,
+        semantic_catalog: SemanticCatalog | None = None,
         **policy_kwargs: Any,
     ) -> SQLGuard:
         """Reflect a live database into a catalog and build a guard.
@@ -706,4 +750,10 @@ class SQLGuard:
             dialect = engine.dialect.name
         if policy is None and policy_kwargs:
             policy = Policy(**policy_kwargs)
-        return cls(catalog=catalog, policy=policy, dialect=dialect, estimators=estimators)
+        return cls(
+            catalog=catalog,
+            policy=policy,
+            dialect=dialect,
+            estimators=estimators,
+            semantic_catalog=semantic_catalog,
+        )
